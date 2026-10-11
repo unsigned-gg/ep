@@ -1,0 +1,16 @@
+[package]
+name = "ep-domain"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "ep (Event Poll & Async Reactor) - Zero-I/O domain types and algebraic state models."
+
+[lints]
+workspace = true
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true
