@@ -104,7 +104,7 @@ impl std::error::Error for ReceiveError {}
 
 /// Parse a `RunRecord` from blackwall's JSON output.
 ///
-/// Expected format (`BLACKWALL_OUTPUT=json` blackwall run show <hash>):
+/// Expected format (`BLACKWALL_OUTPUT=json blackwall run show <hash>`):
 /// ```json
 /// {"hash":"abc123","record":{"prompt":"...","model":"...","exit_code":0,...},
 ///  "context":{"run":"abc123","parent_world":"root","changeset":"","settle_state":{"status":"unsettled"}}}
