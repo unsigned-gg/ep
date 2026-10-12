@@ -5,10 +5,10 @@
 
 ---
 
-## Current State (v1.0.0 Foundation)
+## Current State (v0.1.0 Foundation)
 
-- **v1.0.0 core shipped**: 162 unit tests passing, clippy clean (`-D warnings`), 5 crates.
-- **`escapement-core`**: Zero-dependency pure-Rust engine:
+- **Foundation Core Shipped**: 162 unit tests passing, clippy clean (`-D warnings`), 5 crates documented.
+- **[`escapement-core`](crates/escapement-core/README.md)**: Zero-dependency pure-Rust engine:
   - Deterministic DAG topological resolver (`plan.rs`) with Kahn's algorithm and `BTreeSet` tie-breaking.
   - Nine-state atomic task lifecycle state machine (`dispatch.rs`).
   - BLAKE3 cryptographic custody provenance and chain propagation (`custody.rs`).
@@ -16,9 +16,10 @@
   - Leaky token-bucket metering and weighted fair queueing scheduler (`metering.rs`, `lanes.rs`).
   - Append-only Write-Ahead Log (WAL) persistence and crash recovery (`persistence.rs`).
   - Adaptive backpressure, tenant budgets, and scale-to-zero waker hooks (`backpressure.rs`, `budget.rs`, `waker.rs`).
-- **`blackwall-bridge`**: Landlock sandbox execution adapter.
-- **`ep-domain`**: Zero-I/O domain types and algebraic state models.
-- **`escapement-serve`**: Daemon prototype with HTTP endpoints (`/healthz`, `/dispatch`, `/jobs`) and OTLP tracing.
+- **[`blackwall-bridge`](crates/blackwall-bridge/README.md)**: Landlock sandbox execution adapter.
+- **[`ep-domain`](crates/ep-domain/README.md)**: Zero-I/O domain types and algebraic state models.
+- **[`escapement-serve`](crates/escapement-serve/README.md)**: Single-writer daemon prototype with HTTP endpoints (`/health`, `/v1/tasks/admit`, `/v1/plans/submit`) and OTLP tracing.
+- **[`ep`](crates/ep/README.md)**: Unified CLI runtime interface.
 
 ---
 
