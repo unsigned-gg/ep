@@ -58,6 +58,7 @@ impl fmt::Display for PlanSettleStatus {
 }
 
 impl SettleTracker {
+    /// Create an empty settle tracker.
     #[must_use]
     pub fn new() -> Self {
         Self::default()

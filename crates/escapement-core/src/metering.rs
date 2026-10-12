@@ -23,8 +23,11 @@ pub struct ConcurrencyGuard {
 /// Error returned when a capability is at its concurrency cap.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConcurrencyExceeded {
+    /// The capability that hit its cap.
     pub capability: String,
+    /// Current in-flight count for the capability.
     pub in_flight: usize,
+    /// The configured max-parallel cap.
     pub cap: usize,
 }
 
@@ -41,6 +44,7 @@ impl fmt::Display for ConcurrencyExceeded {
 impl std::error::Error for ConcurrencyExceeded {}
 
 impl ConcurrencyGuard {
+    /// Create an empty concurrency guard.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -112,6 +116,7 @@ pub struct TokenBucket {
 /// Error returned when the bucket has insufficient tokens.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RateLimited {
+    /// Milliseconds the caller should wait before retrying.
     pub retry_after_ms: u64,
 }
 

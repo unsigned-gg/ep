@@ -31,10 +31,15 @@ use crate::registry::AgentId;
 /// A single WAL entry — a queue mutation to persist.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WalEntry {
+    /// The queue mutation type.
     pub op: WalOp,
+    /// The task the mutation applies to.
     pub task_id: TaskId,
+    /// The agent involved, if any.
     pub agent_id: Option<AgentId>,
+    /// The task capability, if recorded.
     pub capability: Option<String>,
+    /// The task priority, if recorded.
     pub priority: Option<u8>,
 }
 

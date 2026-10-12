@@ -25,6 +25,7 @@ pub struct WakerTarget {
 }
 
 impl WakerTarget {
+    /// Create a waker target from its listen address, workload, and namespace.
     #[must_use]
     pub fn new(
         listen_addr: impl Into<String>,
@@ -47,7 +48,10 @@ pub enum WakeResult {
     /// The workload was scaled from zero and is now ready.
     Waked,
     /// The wake timed out after `timeout_ms` milliseconds.
-    Timeout { timeout_ms: u64 },
+    Timeout {
+        /// Milliseconds waited before the wake timed out.
+        timeout_ms: u64,
+    },
     /// A connection error occurred.
     Failed(String),
 }
