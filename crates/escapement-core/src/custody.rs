@@ -32,6 +32,7 @@ impl CustodyRef {
         Ok(Self(hash))
     }
 
+    /// Return the custody hash as a string slice.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
@@ -138,6 +139,7 @@ impl fmt::Display for CustodyError {
 impl std::error::Error for CustodyError {}
 
 impl CustodyChain {
+    /// Create an empty custody chain.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -222,11 +224,13 @@ impl CustodyChain {
         Ok(())
     }
 
+    /// Number of registered dispatch records.
     #[must_use]
     pub fn len(&self) -> usize {
         self.records.len()
     }
 
+    /// Whether the chain holds no records.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.records.is_empty()

@@ -114,14 +114,23 @@ impl fmt::Display for TraceContext {
 /// JSON format for /v1/traces).
 #[derive(Debug, Clone)]
 pub struct Span {
+    /// The trace id (32 hex chars).
     pub trace_id: String,
+    /// The span id (16 hex chars).
     pub span_id: String,
+    /// The parent span id, or all-zero for a root span.
     pub parent_span_id: String,
+    /// The trace flags (e.g. `01` for sampled).
     pub flags: String,
+    /// The span name.
     pub name: String,
+    /// The task id this span belongs to.
     pub task_id: TaskId,
+    /// Additional span attributes.
     pub attributes: BTreeMap<String, String>,
+    /// Span start time in Unix nanoseconds.
     pub start_time_unix_nano: u128,
+    /// Span end time in Unix nanoseconds (0 if not ended).
     pub end_time_unix_nano: u128,
 }
 
@@ -180,6 +189,7 @@ pub struct SpanBatch {
 }
 
 impl SpanBatch {
+    /// Create an empty span batch.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -196,6 +206,7 @@ impl SpanBatch {
         self.spans.len()
     }
 
+    /// Whether the batch holds no spans.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.spans.is_empty()
@@ -259,6 +270,7 @@ pub struct OtlpExporter {
 }
 
 impl OtlpExporter {
+    /// Create an exporter for the given endpoint and service name.
     #[must_use]
     pub fn new(endpoint: impl Into<String>, service_name: impl Into<String>) -> Self {
         Self {

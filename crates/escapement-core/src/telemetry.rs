@@ -90,13 +90,21 @@ pub struct TelemetryLog {
 /// Dispatch lifecycle event types for structured logs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DispatchEvent {
+    /// The task was admitted to the queue.
     Admitted,
+    /// The task was assigned to an agent.
     Assigned,
+    /// The task started executing.
     Started,
+    /// The task completed successfully.
     Completed,
+    /// The task failed.
     Failed,
+    /// The task was cancelled.
     Cancelled,
+    /// The task timed out.
     TimedOut,
+    /// The task was retried.
     Retried,
 }
 

@@ -18,6 +18,7 @@ impl AgentId {
         Ok(Self(id))
     }
 
+    /// Return the agent id as a string slice.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
@@ -30,6 +31,7 @@ impl fmt::Display for AgentId {
     }
 }
 
+/// Lifecycle state of a registered agent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentState {
     /// Registered and available for assignment.
@@ -41,19 +43,27 @@ pub enum AgentState {
     Unreachable,
 }
 
+/// A registered agent and its current state.
 #[derive(Debug, Clone)]
 pub struct AgentRecord {
+    /// The agent's unique id.
     pub id: AgentId,
+    /// Capabilities the agent advertises.
     pub capabilities: BTreeSet<String>,
+    /// The agent's current lifecycle state.
     pub state: AgentState,
     /// Last heartbeat, in caller-supplied milliseconds.
     pub last_heartbeat_ms: u64,
 }
 
+/// Errors from registry operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RegistryError {
+    /// The agent id was empty or whitespace-only.
     InvalidId,
+    /// The agent id was already registered.
     DuplicateAgent(AgentId),
+    /// The agent id is not known to the registry.
     UnknownAgent(AgentId),
 }
 
@@ -77,6 +87,7 @@ pub struct Registry {
 }
 
 impl Registry {
+    /// Create an empty agent registry.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -157,6 +168,7 @@ impl Registry {
             .collect()
     }
 
+    /// Get an agent record by id.
     #[must_use]
     pub fn get(&self, id: &AgentId) -> Option<&AgentRecord> {
         self.agents.get(id)
@@ -189,11 +201,13 @@ impl Registry {
         Ok(())
     }
 
+    /// Number of registered agents.
     #[must_use]
     pub fn len(&self) -> usize {
         self.agents.len()
     }
 
+    /// Whether the registry has no agents.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.agents.is_empty()

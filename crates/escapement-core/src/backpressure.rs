@@ -33,8 +33,11 @@ impl fmt::Display for ProviderHealth {
 /// Per-provider capacity and health state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderCapacity {
+    /// Maximum concurrent dispatches for this provider.
     pub max_concurrent: usize,
+    /// Current in-flight dispatch count.
     pub current_in_flight: usize,
+    /// Current health status of the provider.
     pub health: ProviderHealth,
 }
 
@@ -76,12 +79,19 @@ pub enum BackpressureDecision {
     /// Provider has capacity — dispatch proceeds.
     Accept,
     /// Provider is at capacity — job should queue.
-    Queue { reason: String },
+    Queue {
+        /// Why the job queues.
+        reason: String,
+    },
     /// Provider is down — job should queue (not fail).
-    ProviderDown { provider: String },
+    ProviderDown {
+        /// The provider that is down.
+        provider: String,
+    },
 }
 
 impl ProviderRegistry {
+    /// Create an empty provider registry.
     #[must_use]
     pub fn new() -> Self {
         Self::default()

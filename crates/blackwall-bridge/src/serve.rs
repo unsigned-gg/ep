@@ -463,11 +463,19 @@ pub enum ServeError {
     /// The reqwest client could not be built.
     ClientBuild(String),
     /// A network/transport error occurred.
-    Transport { path: String, msg: String },
+    Transport {
+        /// The request path.
+        path: String,
+        /// The transport error message.
+        msg: String,
+    },
     /// The serve API returned a non-2xx status.
     Status {
+        /// The request path.
         path: String,
+        /// The HTTP status code.
         code: u16,
+        /// The response body.
         body: String,
     },
     /// The response body could not be parsed.

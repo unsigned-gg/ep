@@ -22,6 +22,7 @@ impl TaskId {
         Ok(Self(id))
     }
 
+    /// Return the task id as a string slice.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
@@ -34,27 +35,40 @@ impl fmt::Display for TaskId {
     }
 }
 
+/// A dispatchable task with a capability requirement and priority.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Task {
+    /// The unique task id.
     pub id: TaskId,
+    /// The capability an assigned agent must advertise.
     pub required_capability: String,
     /// Higher dispatches first. Ties break on enqueue order (FIFO).
     pub priority: u8,
 }
 
+/// Lifecycle state of a submitted task.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TaskState {
+    /// Waiting in the queue for an agent.
     Queued,
+    /// Assigned to the given agent.
     Assigned(AgentId),
+    /// Completed by the given agent.
     Completed(AgentId),
 }
 
+/// Errors from dispatch operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DispatchError {
+    /// The task id was empty or whitespace-only.
     InvalidTaskId,
+    /// The task id was already submitted.
     DuplicateTask(TaskId),
+    /// The task id is not known to the dispatcher.
     UnknownTask(TaskId),
+    /// The task is not in an assigned state.
     TaskNotAssigned(TaskId),
+    /// An underlying registry error.
     Registry(RegistryError),
 }
 
@@ -102,6 +116,7 @@ pub struct Dispatcher {
 }
 
 impl Dispatcher {
+    /// Create an empty dispatcher.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -181,11 +196,13 @@ impl Dispatcher {
         Ok(agent_id)
     }
 
+    /// Get the current state of a task.
     #[must_use]
     pub fn state(&self, task_id: &TaskId) -> Option<&TaskState> {
         self.states.get(task_id)
     }
 
+    /// Number of tasks still waiting in the queue.
     #[must_use]
     pub fn queued_len(&self) -> usize {
         self.queue.len()

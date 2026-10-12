@@ -1,3 +1,8 @@
+//! escapement-serve binary entrypoint.
+//!
+//! Reads the listen address and OTLP endpoint from the environment, then
+//! starts the HTTP serve loop.
+
 use escapement_serve::http;
 use escapement_serve::{Orchestrator, OrchestratorConfig};
 

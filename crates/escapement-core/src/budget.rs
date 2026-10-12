@@ -39,6 +39,7 @@ impl fmt::Display for UnknownBudgetProvider {
 impl std::error::Error for UnknownBudgetProvider {}
 
 impl BudgetTracker {
+    /// Create an empty budget tracker.
     #[must_use]
     pub fn new() -> Self {
         Self::default()

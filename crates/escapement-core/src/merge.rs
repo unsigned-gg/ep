@@ -22,6 +22,7 @@ pub struct Changeset {
 }
 
 impl Changeset {
+    /// Create an empty changeset for the given run hash.
     #[must_use]
     pub fn new(run_hash: impl Into<String>) -> Self {
         Self {
@@ -35,6 +36,7 @@ impl Changeset {
         self.entries.insert(path.into(), blob_hash.into());
     }
 
+    /// All paths in the changeset, in sorted order.
     #[must_use]
     pub fn paths(&self) -> Vec<&str> {
         self.entries
@@ -43,11 +45,13 @@ impl Changeset {
             .collect()
     }
 
+    /// Whether the changeset holds no paths.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 
+    /// Number of paths in the changeset.
     #[must_use]
     pub fn len(&self) -> usize {
         self.entries.len()

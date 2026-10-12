@@ -20,7 +20,9 @@ pub type PlanNodeId = crate::dispatch::TaskId;
 /// must complete before this node can dispatch.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanNode {
+    /// The task this node dispatches.
     pub task: Task,
+    /// Task ids that must complete before this node dispatches.
     pub needs: BTreeSet<PlanNodeId>,
 }
 
@@ -41,6 +43,7 @@ impl PlanNode {
         self
     }
 
+    /// The node's id (its task id).
     #[must_use]
     pub fn id(&self) -> &PlanNodeId {
         &self.task.id
@@ -61,7 +64,9 @@ pub enum PlanError {
     DuplicateNode(PlanNodeId),
     /// A `needs` entry references a node id not in the plan.
     MissingNeed {
+        /// The node that declares the missing need.
         node: PlanNodeId,
+        /// The referenced node id that is absent.
         missing: PlanNodeId,
     },
     /// The dependency graph contains a cycle.
@@ -83,6 +88,7 @@ impl fmt::Display for PlanError {
 impl std::error::Error for PlanError {}
 
 impl Plan {
+    /// Create an empty plan.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -222,16 +228,19 @@ impl Plan {
         self.nodes.values()
     }
 
+    /// Number of nodes in the plan.
     #[must_use]
     pub fn len(&self) -> usize {
         self.nodes.len()
     }
 
+    /// Whether the plan has no nodes.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.nodes.is_empty()
     }
 
+    /// Get a node by id.
     #[must_use]
     pub fn get(&self, id: &PlanNodeId) -> Option<&PlanNode> {
         self.nodes.get(id)
