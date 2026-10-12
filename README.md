@@ -20,6 +20,13 @@
 - **`crates/escapement-serve`**: HTTP and gRPC orchestration server with Tempo/Jaeger OpenTelemetry tracing.
 - **`crates/blackwall-bridge`**: Sandbox confinement adapter and isolated process execution bridge.
 
+## Roadmap & Specifications
+
+- **Roadmap Overview**: See [`ROADMAP.md`](ROADMAP.md) for current capabilities and development horizons.
+- **Formal Specifications**: See [`specs/`](specs/) for architectural contracts and operational invariants:
+  - [`SPEC-0001: Escapement Scheduler & Deterministic Event Reactor`](specs/SPEC-0001-escapement-scheduler.md)
+  - [`SPEC-0002: Escapement Protocol Roadmap & Evolution Horizons`](specs/SPEC-0002-roadmap.md)
+
 ## Building & Verification
 
 All cargo invocations on multi-agent hosts MUST specify `-j 2`:
