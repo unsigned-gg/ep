@@ -1,5 +1,7 @@
 # ep — Escapement Scheduler & Deterministic Event Reactor
 
+[![License: Apache-2.0 OR MIT](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue.svg)](LICENSE-APACHE)
+
 > Metered, deterministic dispatch engine and event reactor for autonomous agent constellations.  
 > Pure-Rust, zero-dependency core dispatch, capability matching, custody DAGs, and tick scheduling.  
 > Dual-licensed under `Apache-2.0 OR MIT` and dedicated to the open testbed of mutual cooperation between man and machine.
@@ -29,4 +31,6 @@ cargo test -j 2
 
 ## License
 
-Dual-licensed under `Apache-2.0 OR MIT`.
+Dual-licensed under `Apache-2.0 OR MIT`. See [LICENSE-APACHE](LICENSE-APACHE) and [LICENSE-MIT](LICENSE-MIT).
+
+This repository follows the unsigned constitution: [Privacy, Freedom, Dignity](https://github.com/unsigned-gg/.github/blob/main/PRIVACY_FREEDOM_DIGNITY.md) · [Guiding Principles](https://github.com/unsigned-gg/.github/blob/main/GUIDING_PRINCIPLES.md) · [Community Standards](https://github.com/unsigned-gg/.github/blob/main/COMMUNITY_STANDARDS.md) · [Brand Voice](https://github.com/unsigned-gg/.github/blob/main/BRAND_VOICE.md).
