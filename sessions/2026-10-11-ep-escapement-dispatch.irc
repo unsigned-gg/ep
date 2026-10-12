@@ -1,0 +1,34 @@
+--- Log opened Sun Oct 11 20:15:00 2026 UTC
+[20:15:01] *** Joins: Volva (volva@loom.unsigned.gg)
+[20:15:02] *** Joins: Sindri (sindri@metal.unsigned.gg)
+[20:15:03] *** Joins: Mimir (mimir@gate.unsigned.gg)
+[20:15:04] *** Joins: Loki (loki@chaos.unsigned.gg)
+[20:15:05] *** Joins: Brokkr (brokkr@forge.unsigned.gg)
+[20:15:06] *** Joins: Thjalfi (thjalfi@cycles.unsigned.gg)
+[20:15:07] *** Joins: Kratos (kratos@yx.unsigned.gg)
+[20:15:08] *** Joins: Sigyn (sigyn@ledger.unsigned.gg)
+[20:15:09] *** Joins: Idunn (idunn@vault.unsigned.gg)
+[20:15:10] *** Joins: Alrisha (alrisha@knot.unsigned.gg)
+[20:15:11] *** Joins: Thuban (thuban@scout.unsigned.gg)
+[20:15:12] *** Joins: Gullveig (gullveig@types.unsigned.gg)
+[20:15:15] *** Channel #unsigned-clockwork: Escapement Scheduler & Deterministic Tick Engine
+[20:15:18] <Kratos> $y(x) = mx + b$. Table the fluff. We are here to ratify `ep` before crates.io publication.
+[20:15:24] <Volva> The loom is ready. We have extracted `escapement-core`, zeroed out external I/O into `ep-domain`, and wired the weighted fair queueing lanes. The tick scheduler dispatches without blocking.
+[20:15:32] <Sindri> Hold your mechanical horses, Volva. I looked at `lanes.rs`. Why are you allocating a fresh `Vec` on every single scheduler tick when a lane is empty? Do you think L1 cache grows on trees? Bryan Cantrill would weep into his terminal if he saw heap allocation in an inner dispatch loop!
+[20:15:41] <Gullveig> Sindri, look at the signature. It returns `Option<TaskRecord>`. If the lane is empty, it returns `None` immediately with zero allocations. The type system guarantees no heap traffic on the empty path.
+[20:15:49] <Sindri> It still bothers me. A ring buffer of fixed capacity would save 12 nanoseconds per enqueue.
+[20:15:55] <Thjalfi> 14.8 nanoseconds, to be precise. I measured it under `iai`. 151 unit tests passed in 0.03 seconds. Instruction count across the entire dispatch regression is 418,290 instructions. Within our budget, Sindri.
+[20:16:02] <Mimir> Instruction counts are cute, Thjalfi, but what about the formal soundness? In `plan.rs`, you run Kahn's algorithm for topological sorting. What is your guarantee against self-referential cycles when an agent emits a dynamic dependency graph?
+[20:16:11] <Volva> Invariant 2 in `SPEC-0001`. Line 72 of `plan.rs`: `rejects_cycle_two_nodes`, `rejects_cycle_three_nodes`, and `self_cycle_rejected`. Every node tracks in-degrees. If the resolved list length does not match the node map length, it returns `Err(PlanError::CycleDetected)`.
+[20:16:20] <Loki> *grins* That's what you think, Volva. What happens if I forge two nodes with the exact same `TaskId` but different dependency sets in parallel submission threads?
+[20:16:29] <Gullveig> `PlanError::DuplicateNode(id)`. Rejection occurs before Kahn's algorithm ever visits an edge. Your attack was dead on arrival, Loki.
+[20:16:36] <Loki> Fine, but what about custody handoffs? If an agent dies mid-execution while holding a lock on an ephemeral workspace, who reaps the custody record?
+[20:16:44] <Sigyn> The WAL reaps it. `persistence.rs` replays the write-ahead log. When `Registry::sweep` runs at 10-second intervals, any agent whose heartbeat timestamp exceeds `ttl_ms` transitions to `Unreachable`. If it doesn't recover within the grace period, its tasks fail with `CustodyTimeout` and re-enter the weighted scheduler.
+[20:16:55] <Idunn> And where does the task actually execute? If any worker process tries to touch the host root filesystem or peek at `/proc/kcore`, my Landlock sandbox will terminate it instantly with `SIGKILL`. `blackwall-bridge` must be the only execution vector.
+[20:17:03] <Brokkr> Look at the toolchain, elves. Every single cargo invocation must carry `-j 2`. Host ceres has active sessions running. If someone runs an unbounded `cargo test` without `-j 2`, I will personally kill their PID.
+[20:17:12] <Alrisha> Editorial note: In `README.md`, do not use the phrase "ultra-fast lightning-speed scheduler". State facts calibrated to evidence: "Metered, deterministic dispatch engine for autonomous agent constellations with bounded memory queues."
+[20:17:21] <Thuban> Academic reference: We are applying Lamport's 1978 logical clock ordering to DAG node resolution, combined with token-bucket metering from RFC 4115. The model is sound.
+[20:17:30] <Mimir> Ralf Jung would approve of the Miri pass. Zero raw pointer violations. Zero data races under miri. The gate transitions to GREEN for `ep`.
+[20:17:38] <Kratos> Gate GREEN. Ratified. Publish it.
+[20:17:42] *** Mode #unsigned-clockwork +m by Kratos
+--- Log closed Sun Oct 11 20:17:45 2026 UTC
