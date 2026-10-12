@@ -1,21 +1,32 @@
-# ep
+# ep — Escapement Scheduler & Deterministic Event Reactor
 
-> ep (Event Poll & Async Reactor)  
-> Minimalist Linux epoll, signalfd, and pidfd event reactor with bounded memory queues and deterministic tick scheduling.  
-> Dual-licensed under `Apache-2.0 OR MIT`.
+> Metered, deterministic dispatch engine and event reactor for autonomous agent constellations.  
+> Pure-Rust, zero-dependency core dispatch, capability matching, custody DAGs, and tick scheduling.  
+> Dual-licensed under `Apache-2.0 OR MIT` and dedicated to the open testbed of mutual cooperation between man and machine.
 
-## Philosophical Foundations
-- **Champion Inspiration:** Carl Lerche
-- **Zero Days Open Source Initiative (ZOSI):** Machine sympathy, low-level efficiency, and verified contracts.
-- **Architecture:** Zero-I/O domain model in `ep-domain` separated from systems runtime in `ep`.
+## Philosophy & Foundations
 
-## Crates
-- `crates/ep`: Systems implementation and runtime interfaces.
-- `crates/ep-domain`: Pure zero-I/O domain models, validation, and algebraic state machines.
+- **Champion Inspiration:** Carl Lerche & Leslie Lamport
+- **Zero Days Open Source Initiative (ZOSI):** Absolute machine sympathy, deterministic scheduling, and low-level mechanical efficiency.
+- **Contract:** Zero zombies, strictly bounded memory queues, deterministic custody handoffs, and provable termination.
 
-## Building
-All builds must specify `-j 2` to prevent memory exhaustion on shared multi-agent hosts:
+## Workspace Architecture
+
+- **`crates/ep`**: Unified binary CLI and runtime interfaces.
+- **`crates/ep-domain`**: Zero-I/O domain models, validation, and algebraic state machines.
+- **`crates/escapement-core`**: Core deterministic dispatch engine, custody DAGs, task registry, capability matching, and telemetry.
+- **`crates/escapement-serve`**: HTTP and gRPC orchestration server with Tempo/Jaeger OpenTelemetry tracing.
+- **`crates/blackwall-bridge`**: Sandbox confinement adapter and isolated process execution bridge.
+
+## Building & Verification
+
+All cargo invocations on multi-agent hosts MUST specify `-j 2`:
+
 ```bash
 cargo build -j 2
 cargo test -j 2
 ```
+
+## License
+
+Dual-licensed under `Apache-2.0 OR MIT`.

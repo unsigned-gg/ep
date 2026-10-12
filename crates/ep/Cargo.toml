@@ -8,11 +8,17 @@ authors.workspace = true
 repository.workspace = true
 description = "Escapement scheduler — metered, deterministic dispatch engine and event reactor"
 
+[[bin]]
+name = "ep"
+path = "src/main.rs"
+
 [lints]
 workspace = true
 
 [dependencies]
 ep-domain = { path = "../ep-domain" }
+escapement-core = { path = "../escapement-core" }
+blackwall-bridge = { path = "../blackwall-bridge" }
 anyhow.workspace = true
 thiserror.workspace = true
 serde.workspace = true
