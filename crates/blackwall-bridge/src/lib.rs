@@ -84,7 +84,12 @@ pub enum BridgeError {
     /// The `blackwall` binary is not on PATH or failed to execute.
     BinaryNotFound(String),
     /// The blackwall command returned a non-zero exit code.
-    CommandFailed { code: i32, stderr: String },
+    CommandFailed {
+        /// The process exit code.
+        code: i32,
+        /// The captured standard error.
+        stderr: String,
+    },
     /// The blackwall output could not be parsed.
     ParseError(String),
     /// The task spec is missing required fields for a blackwall dispatch.
@@ -113,11 +118,13 @@ pub struct BlackwallBridge {
 }
 
 impl BlackwallBridge {
+    /// Create a bridge with the given configuration.
     #[must_use]
     pub fn new(config: BridgeConfig) -> Self {
         Self { config }
     }
 
+    /// Create a bridge with default configuration.
     #[must_use]
     pub fn with_defaults() -> Self {
         Self::new(BridgeConfig::default())
@@ -221,10 +228,15 @@ impl BlackwallBridge {
 /// A blackwall run specification built from an escapement task.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunSpec {
+    /// The blackwall task name.
     pub task_name: String,
+    /// The run prompt.
     pub prompt: String,
+    /// The provider to route the run to.
     pub provider: String,
+    /// The model to use.
     pub model: String,
+    /// Maximum turns allowed for the run.
     pub max_turns: u32,
 }
 

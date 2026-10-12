@@ -54,9 +54,13 @@ impl fmt::Display for Presence {
 /// A roster entry from mission-control's `AgentHub`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RosterEntry {
+    /// The agent's id.
     pub agent_id: String,
+    /// The agent's display name.
     pub name: String,
+    /// The agent's kind (e.g. `llm`, `vm`).
     pub kind: String,
+    /// The agent's presence state.
     pub presence: Presence,
 }
 
@@ -72,6 +76,7 @@ pub struct PresenceBridge {
 }
 
 impl PresenceBridge {
+    /// Create an empty presence bridge.
     #[must_use]
     pub fn new() -> Self {
         Self::default()

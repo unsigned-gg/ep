@@ -16,12 +16,14 @@ use std::fmt;
 /// A named priority lane with an integer weight.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PriorityLane {
+    /// The lane name (e.g. `critical`, `normal`).
     pub name: String,
     /// Higher weight = more dispatch slots per round.
     pub weight: u32,
 }
 
 impl PriorityLane {
+    /// Create a lane with a name and weight.
     #[must_use]
     pub fn new(name: impl Into<String>, weight: u32) -> Self {
         Self {
@@ -85,6 +87,7 @@ impl Default for LaneScheduler {
 }
 
 impl LaneScheduler {
+    /// Create an empty scheduler with the given deficit quantum.
     #[must_use]
     pub fn new(quantum: u64) -> Self {
         Self {

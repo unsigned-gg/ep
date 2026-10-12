@@ -24,15 +24,20 @@ pub const PROTOCOL_VERSION: &str = "0.1";
 /// A message in the dispatch protocol.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProtocolMessage {
+    /// A plan or one-shot task submission.
     PlanSubmission(PlanSubmission),
+    /// An admission receipt.
     DispatchReceipt(DispatchReceipt),
+    /// A settle receipt.
     SettleReceipt(SettleReceipt),
 }
 
 /// Submit a plan or one-shot task for dispatch.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanSubmission {
+    /// The protocol version.
     pub protocol: String,
+    /// The plan nodes to dispatch.
     pub nodes: Vec<PlanNodeSpec>,
     /// Custody references for root nodes (predecessor outputs).
     pub custody_refs: Vec<CustodyRef>,
@@ -41,7 +46,9 @@ pub struct PlanSubmission {
 /// A task spec within a plan submission.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanNodeSpec {
+    /// The task to dispatch.
     pub task: Task,
+    /// Task ids this node depends on.
     pub needs: BTreeSet<TaskId>,
 }
 
@@ -55,6 +62,7 @@ impl From<&PlanNode> for PlanNodeSpec {
 }
 
 impl PlanSubmission {
+    /// Create a submission for the given plan nodes.
     #[must_use]
     pub fn new(nodes: Vec<PlanNodeSpec>) -> Self {
         Self {
@@ -64,6 +72,7 @@ impl PlanSubmission {
         }
     }
 
+    /// Attach custody references for root nodes. Returns `self` for chaining.
     #[must_use]
     pub fn with_custody(mut self, refs: Vec<CustodyRef>) -> Self {
         self.custody_refs = refs;
@@ -74,10 +83,13 @@ impl PlanSubmission {
 /// Admission receipt returned when a plan/task is accepted.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DispatchReceipt {
+    /// The protocol version.
     pub protocol: String,
+    /// The job id assigned to the submission.
     pub job_id: TaskId,
     /// Position in the queue (0 = next to dispatch).
     pub queue_position: usize,
+    /// The admission decision.
     pub decision: AdmissionDecision,
 }
 
@@ -87,12 +99,19 @@ pub enum AdmissionDecision {
     /// Accepted and queued.
     Admitted,
     /// Accepted but deferred (waiting for capacity).
-    Deferred { reason: String },
+    Deferred {
+        /// Why the submission was deferred.
+        reason: String,
+    },
     /// Rejected (over quota, invalid plan, etc.).
-    Rejected { reason: String },
+    Rejected {
+        /// Why the submission was rejected.
+        reason: String,
+    },
 }
 
 impl DispatchReceipt {
+    /// Build an admitted receipt.
     #[must_use]
     pub fn admitted(job_id: TaskId, queue_position: usize) -> Self {
         Self {
@@ -103,6 +122,7 @@ impl DispatchReceipt {
         }
     }
 
+    /// Build a deferred receipt with a reason.
     #[must_use]
     pub fn deferred(job_id: TaskId, queue_position: usize, reason: impl Into<String>) -> Self {
         Self {
@@ -115,6 +135,7 @@ impl DispatchReceipt {
         }
     }
 
+    /// Build a rejected receipt with a reason.
     #[must_use]
     pub fn rejected(job_id: TaskId, reason: impl Into<String>) -> Self {
         Self {
@@ -131,7 +152,9 @@ impl DispatchReceipt {
 /// Receipt returned when a run settles (completes, fails, or is discarded).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SettleReceipt {
+    /// The protocol version.
     pub protocol: String,
+    /// The job id that settled.
     pub job_id: TaskId,
     /// The BLAKE3 hash of the blackwall run record.
     pub run_hash: CustodyRef,
@@ -142,6 +165,7 @@ pub struct SettleReceipt {
 }
 
 impl SettleReceipt {
+    /// Build a settle receipt from a job id, run hash, state, and output.
     #[must_use]
     pub fn new(
         job_id: TaskId,
@@ -163,7 +187,12 @@ impl SettleReceipt {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProtocolError {
     /// The message's protocol version is incompatible.
-    VersionMismatch { expected: String, found: String },
+    VersionMismatch {
+        /// The expected protocol version.
+        expected: String,
+        /// The version found in the message.
+        found: String,
+    },
     /// The message is malformed.
     Malformed(String),
 }
