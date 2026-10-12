@@ -1,18 +1,11 @@
-//! escapement-core — agent-orchestration engine primitives.
+//! escapement-core provides primitives for autonomous agent orchestration.
 //!
-//! v0 surface: an agent [`registry`] (registration, liveness, capability
-//! lookup), a [`dispatch`] layer (priority task queue, capability-matched
-//! assignment, full lifecycle state machine), a [`plan`] layer (DAG plan,
-//! topological resolution), a [`custody`] layer (content-addressed
-//! provenance, chain propagation), a [`protocol`] layer (typed wire
-//! format for dispatch communication), a [`metering`] layer (concurrency
-//! limits, token-bucket rate limiting), a [`lanes`] layer (priority lanes,
-//! weighted fair queueing), a [`backpressure`] layer (provider capacity
-//! tracking), a [`persistence`] layer (WAL serialization, crash recovery),
-//! a [`resilience`] layer (retry policy), a [`telemetry`] layer (span/metric/log
-//! types), and a [`budget`] layer (per-provider token caps). Time is
-//! caller-supplied milliseconds so the engine stays deterministic and
-//! host-agnostic.
+//! # Architecture
+//! The engine includes an agent [`registry`], a priority [`dispatch`] queue, and a DAG [`plan`] solver.
+//! It tracks [`custody`] chains and enforces typed [`protocol`] messages.
+//! The system controls throughput with [`metering`], priority [`lanes`], [`backpressure`], and [`budget`] limits.
+//! It supports state [`persistence`], failure [`resilience`], [`tracing`], and [`telemetry`].
+//! Callers supply time in milliseconds to keep execution deterministic.
 
 pub mod backpressure;
 pub mod budget;
