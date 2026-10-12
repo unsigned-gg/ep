@@ -1,100 +1,115 @@
+---
+status: living
+created: 2026-10-12
+tags: [roadmap, evolution, horizons, leanspec, scale-to-zero, formal-verification]
+priority: high
+scope: workspace
+depends_on: [SPEC-0001]
+---
+
 # SPEC-0002: Escapement Protocol Roadmap & Evolution Horizons
 
-## 1. Status & Metadata
-- **Status:** Approved & Living
+## Requirements
+
+1. The development roadmap shall partition evolution into five verifiable horizons: Core Engine, Unified CLI, Scale-to-Zero Waker, Formal Verification, and Ecosystem Federation.
+2. Every evolution horizon shall define verifiable acceptance criteria prior to implementation.
+3. Core dispatch primitives shall remain zero-dependency in `crates/escapement-core`.
+4. Host throttling rules (`-j 2`) shall remain mandatory across all continuous integration tasks.
+5. All Git commits modifying specifications or architecture shall be signed cryptographically (`git commit -S`).
+
+```lean
+namespace Escapement.Roadmap
+
+/-- Roadmap phases for the Escapement scheduler. -/
+inductive HorizonPhase : Type where
+  | core_engine : HorizonPhase
+  | unified_cli : HorizonPhase
+  | scale_to_zero : HorizonPhase
+  | formal_verification : HorizonPhase
+  | ecosystem_federation : HorizonPhase
+
+/-- Phase progression mapping. -/
+def phase_index (p : HorizonPhase) : Nat :=
+  match p with
+  | .core_engine => 1
+  | .unified_cli => 2
+  | .scale_to_zero => 3
+  | .formal_verification => 4
+  | .ecosystem_federation => 5
+
+/-- Invariant: Phased progression is monotonically increasing. -/
+theorem phases_monotonically_ordered :
+  phase_index .core_engine < phase_index .unified_cli := by decide
+```
+
+## Design
+
+### Phased Evolution Horizons
+
+```
+  Phase 1: Core Engine ──► Phase 2: Unified CLI ──► Phase 3: Scale-to-Zero
+     (Shipped v0.1)           (In Progress)             (Portolan Waker)
+                                                              │
+                                                              ▼
+  Phase 5: Ecosystem Federation ◄── Phase 4: Formal Verification
+      (Crates.io & Edge)               (Loom, Miri & Lattices)
+```
+
+### Horizon Breakdown
+
+1. **Phase 1: Core Engine & Invariants (Shipped)**
+   - Kahn's topological sort with `BTreeSet` deterministic resolution.
+   - Nine-state atomic task lifecycle with BLAKE3 cryptographic custody chains.
+   - Versioned wire protocol (`PROTOCOL_VERSION = "0.1"`).
+   - Monotonic integer token buckets and weighted fair queueing lanes.
+   - Write-Ahead Log (WAL) persistence and state replay reconstruction.
+2. **Phase 2: Unified CLI & Ergonomics (In Progress)**
+   - `ep plan validate <file>`: Cycle detection and dependency inspection.
+   - `ep plan render <file>`: ASCII and Mermaid topological schedule visualization.
+   - `ep wal inspect <log>`: WAL integrity and record verification.
+   - `ep wal replay <log>`: Memory simulation of dispatcher recovery.
+3. **Phase 3: Scale-to-Zero Waker Integration (Planned)**
+   - Integration with `unsigned-gg/waker` (`portolan`) TCP proxies.
+   - `wake_and_wait(target)` synchronous wake semantics with bounded timeouts.
+   - Health-gated dispatch preventing assignment to failing pods.
+4. **Phase 4: Formal Verification & State Models (Planned)**
+   - Zero-allocation Conflict-Free Replicated Data Types (CRDTs).
+   - Stateright/Loom model checking of concurrency handoffs.
+   - Property-based testing (`proptest`) for arbitrary DAG graphs.
+5. **Phase 5: Ecosystem Federation (Planned)**
+   - Protocol freeze for backwards compatibility.
+   - Crates.io publication of standalone `escapement-core`.
+   - Cloudflare Worker edge filters and OTLP telemetry federation.
+
+## Tasks
+
+- [x] Phase 1: Land core dispatch engine, DAG solver, and custody tracking (`unsigned-gg/ep@6765df9:crates/escapement-core`).
+- [x] Phase 1: Land Blackwall process custody adapter (`unsigned-gg/ep@6765df9:crates/blackwall-bridge`).
+- [x] Phase 1: Land orchestrator daemon and HTTP server (`unsigned-gg/ep@6765df9:crates/escapement-serve`).
+- [ ] Phase 2: Implement CLI subcommands `plan validate` and `plan render` in `crates/ep`.
+- [ ] Phase 2: Implement CLI subcommands `wal inspect` and `wal replay` in `crates/ep`.
+- [ ] Phase 3: Wire Portolan TCP waker client in `escapement-core::waker`.
+- [ ] Phase 4: Construct Loom concurrency verification harnesses.
+- [ ] Phase 5: Prepare standalone Crates.io release packages.
+
+## Verification
+
+1. **CI Test Suite:** Verify clean execution under host throttling:
+   ```bash
+   cargo test -j 2 --workspace
+   ```
+2. **Commit Verification:** Every commit signed with authorized GPG key:
+   ```bash
+   git log --show-signature -n 5
+   ```
+3. **Authentic Source Locators:**
+   - `unsigned-gg/ep@6765df9:crates/escapement-core/src/plan.rs`
+   - `unsigned-gg/ep@6765df9:crates/escapement-core/src/custody.rs`
+   - `unsigned-gg/ep@6765df9:crates/escapement-serve/src/lib.rs`
+
+## Notes
+
 - **Authors:** Gullveig <gullveig@types.unsigned.gg>, Mimir <mimir@unsigned.gg>, Volva <volva@unsigned.gg>
 - **Champion Inspiration:** Oleg Kiselyov, Leslie Lamport, Carl Lerche
-- **Target Crate:** `ep` (`escapement-core`, `ep-domain`, `blackwall-bridge`, `escapement-serve`, `ep`)
-- **License:** Apache-2.0 OR MIT / CC0 1.0 Universal
-- **Lineage:** Follows `SPEC-0001-escapement-scheduler.md`
-
----
-
-## 2. Problem Statement & Scope
-Autonomous agent swarms require predictable execution horizons. Unmetered task dispatch causes memory exhaustion, cascading retries, and opaque state transitions.
-
-`ep` supplies metered, deterministic dispatch through zero-dependency Rust primitives. This document defines the development roadmap for `ep` across five architectural phases:
-1. Core Dispatch Engine (Phase 1 — Shipped).
-2. Unified Command-Line Interface (Phase 2 — In Progress).
-3. Distributed Scale-to-Zero Integration (Phase 3 — Planned).
-4. Formal Verification & Algebraic Lattices (Phase 4 — Planned).
-5. Ecosystem Federation & Protocol Stabilization (Phase 5 — Planned).
-
----
-
-## 3. Phased Roadmap Specifications
-
-### Phase 1: Core Dispatch Engine (Shipped / Foundation)
-Phase 1 established the deterministic dispatch foundation. All Phase 1 modules compile with zero external dependencies in `escapement-core`.
-
-- **Deterministic DAG Resolver (`plan.rs`):** Implements Kahn's topological sort. Uses `BTreeSet` tie-breaking for deterministic node ordering. Detects cycles and missing dependencies.
-- **Atomic Task Lifecycle (`dispatch.rs`):** Implements a nine-state lifecycle (`Admitted`, `Queued`, `Assigned`, `Running`, `Completed`, `Failed`, `Cancelled`, `TimedOut`, `DeadLettered`).
-- **Cryptographic Custody Chains (`custody.rs`):** Tracks content-addressed BLAKE3 provenance chains from root parent tasks to execution outputs.
-- **Typed Wire Protocol (`protocol.rs`):** Rejects untyped JSON payloads. Enforces version negotiation (`PROTOCOL_VERSION = "0.1"`) across `PlanSubmission`, `DispatchReceipt`, and `SettleReceipt`.
-- **Metered Fair Queuing (`metering.rs`, `lanes.rs`):** Implements leaky token buckets without floating-point arithmetic. Schedules tasks via weighted fair queueing lanes.
-- **Append-Only Persistence (`persistence.rs`):** Writes state mutations to a Write-Ahead Log (WAL). Reconstructs dispatcher state upon restart.
-- **Containment Bridge (`blackwall-bridge`):** Adapts dispatch jobs to Landlock-confined blackwall sandboxes.
-- **Daemon Prototype (`escapement-serve`):** Provides HTTP endpoints (`/healthz`, `/dispatch`, `/jobs`) and OTLP trace context propagation.
-
-### Phase 2: Unified Command-Line Interface & Ergonomics (In Progress)
-Phase 2 turns the `crates/ep` binary into a standalone operator tool. The CLI allows offline verification, plan inspection, and WAL auditing.
-
-- **`ep plan validate <file>`:** Parses and checks task graphs for cycles, missing dependencies, and priority validity.
-- **`ep plan render <file>`:** Generates topological schedules and prints execution diagrams in ASCII or Mermaid format.
-- **`ep wal inspect <log>`:** Decodes WAL records. Verifies operation sequence continuity and checksums.
-- **`ep wal replay <log>`:** Simulates recovery in memory. Displays final task states without starting network listeners.
-- **`ep lanes status`:** Displays lane queue depths, token capacities, and scheduling weights.
-- **Ergonomic Output Modes:** Supports human-readable terminal output and structured JSON output for scripts.
-
-### Phase 3: Distributed Scale-to-Zero & Waker Integration (Planned)
-Phase 3 integrates `ep` with scale-to-zero infrastructure to support idle agent fleets.
-
-- **Actuator Integration (`waker.rs`):** Coordinates with `unsigned-gg/waker` (`portolan`) TCP wake proxies.
-- **Synchronous Wake Primitives:** Implements `wake_and_wait(target)` with bounded timeouts (maximum 120 seconds).
-- **Health-Gated Dispatch:** Prevents task assignment when target pods report restart backoff or failing probes.
-- **Multi-Node Topology:** Distributes lane queues across cluster nodes while maintaining deterministic custody records.
-
-### Phase 4: Formal Verification & Algebraic State Models (Planned)
-Phase 4 formalizes type-level contracts and verifies concurrent safety.
-
-- **Zero-Allocation Lattices (`merge.rs`, `ep-domain`):** Provides algebraic conflict-free replicated data types (CRDTs) for merging parallel task states.
-- **Type-State Lifecycle Constraints:** Encodes valid task states in Rust types to prevent invalid transitions at compile time.
-- **Model Checking:**
-  - Validates lock-free queues and atomic state transitions using Stateright or Loom.
-  - Validates graph resolution using property-based testing (`proptest`) over arbitrary cyclic and acyclic topologies.
-- **Undefined Behavior Auditing:** Enforces zero undefined behavior under Miri across domain and core crates.
-
-### Phase 5: Ecosystem Federation & Protocol Stabilization (Planned)
-Phase 5 stabilizes external interfaces for wide open-source distribution.
-
-- **Protocol v1.0 Freeze:** Freezes the wire protocol to guarantee backwards compatibility.
-- **Crates.io Publication:** Publishes `escapement-core` as a standalone, zero-dependency crate.
-- **Edge Gateway:** Deploys Cloudflare Worker edge filters for initial payload validation.
-- **Mesh Telemetry:** Standardizes OTLP trace and metric export across the entire agent constellation.
-
----
-
-## 4. Architectural Invariants & Governance
-
-> [!IMPORTANT]
-> All pull requests and code modifications must satisfy the following architectural invariants.
-
-1. **Zero External Dependencies in Core:** The `escapement-core` crate must maintain an empty `[dependencies]` table.
-2. **Deterministic Time Execution:** All core routines must accept time as caller-supplied millisecond timestamps. Never call host clock functions in core logic.
-3. **Controlled Language Precision:** All documentation, error messages, and rustdoc comments must adhere to ASD-STE100 rules.
-4. **Mandatory Commit Signatures:** All Git commits must be signed cryptographically (`git commit -S`).
-
----
-
-## 5. Verification & Testing Discipline
-
-> [!WARNING]
-> Ceres runs multi-agent workloads. Unthrottled cargo commands cause memory exhaustion and process termination.
-
-Always specify `-j 2` for all build and test invocations.
-
-```bash
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -j 2 -- -D warnings
-cargo test --workspace -j 2
-```
+- **Editorial Alignment:** Follows `cerebral-docs/overview/research-and-development/editorial-standards.md`
+- **License:** Tri-licensed under `Apache-2.0 OR MIT OR CC0-1.0`
