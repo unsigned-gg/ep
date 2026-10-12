@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
-description = "Minimalist Linux epoll, signalfd, and pidfd event reactor with bounded memory queues and deterministic tick scheduling."
+description = "Escapement scheduler — metered, deterministic dispatch engine and event reactor"
 
 [lints]
 workspace = true
