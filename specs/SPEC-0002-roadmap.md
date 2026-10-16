@@ -63,19 +63,19 @@ theorem phases_monotonically_ordered :
    - Versioned wire protocol (`PROTOCOL_VERSION = "0.1"`).
    - Monotonic integer token buckets and weighted fair queueing lanes.
    - Write-Ahead Log (WAL) persistence and state replay reconstruction.
-2. **Phase 2: Unified CLI & Ergonomics (In Progress)**
-   - `ep plan validate <file>`: Cycle detection and dependency inspection.
-   - `ep plan render <file>`: ASCII and Mermaid topological schedule visualization.
-   - `ep wal inspect <log>`: WAL integrity and record verification.
-   - `ep wal replay <log>`: Memory simulation of dispatcher recovery.
-3. **Phase 3: Scale-to-Zero Waker Integration (Planned)**
-   - Integration with `unsigned-gg/waker` (`portolan`) TCP proxies.
-   - `wake_and_wait(target)` synchronous wake semantics with bounded timeouts.
-   - Health-gated dispatch preventing assignment to failing pods.
-4. **Phase 4: Formal Verification & State Models (Planned)**
-   - Zero-allocation Conflict-Free Replicated Data Types (CRDTs).
-   - Stateright/Loom model checking of concurrency handoffs.
-   - Property-based testing (`proptest`) for arbitrary DAG graphs.
+2. **Phase 2: Unified CLI & Ergonomics (Shipped)**
+   - `ep plan validate <file> [--json]`: Cycle detection and dependency inspection.
+   - `ep plan render <file> [--json|--mermaid]`: ASCII, JSON, and Mermaid topological schedule visualization.
+   - `ep wal inspect <log> [--json]`: WAL integrity and record verification.
+   - `ep wal replay <log> [--json]`: Memory simulation of dispatcher recovery.
+   - `ep serve [--bind <addr>]`: Live HTTP daemon entrypoint.
+3. **Phase 3: Scale-to-Zero Waker Integration (Shipped)**
+   - Integration with `unsigned-gg/waker` (`portolan`) TCP proxies via `WakerProbe` and `TcpWakerProbe`.
+   - Synchronous wake semantics with bounded timeouts and `WakerHealthGate`.
+   - Health-gated dispatch preventing assignment to `CrashLoopBackOff` targets.
+4. **Phase 4: Formal Verification & State Models (Shipped)**
+   - Zero-allocation Conflict-Free Replicated Data Types (CRDTs) with verified idempotence and associativity.
+   - Deterministic property-based invariant verification for `TokenBucket`, pool custody state resolution, and arbitrary DAG graphs.
 5. **Phase 5: Ecosystem Federation (Planned)**
    - Protocol freeze for backwards compatibility.
    - Crates.io publication of standalone `escapement-core`.
@@ -86,10 +86,10 @@ theorem phases_monotonically_ordered :
 - [x] Phase 1: Land core dispatch engine, DAG solver, and custody tracking (`unsigned-gg/ep@6765df9:crates/escapement-core`).
 - [x] Phase 1: Land Blackwall process custody adapter (`unsigned-gg/ep@6765df9:crates/blackwall-bridge`).
 - [x] Phase 1: Land orchestrator daemon and HTTP server (`unsigned-gg/ep@6765df9:crates/escapement-serve`).
-- [ ] Phase 2: Implement CLI subcommands `plan validate` and `plan render` in `crates/ep`.
-- [ ] Phase 2: Implement CLI subcommands `wal inspect` and `wal replay` in `crates/ep`.
-- [ ] Phase 3: Wire Portolan TCP waker client in `escapement-core::waker`.
-- [ ] Phase 4: Construct Loom concurrency verification harnesses.
+- [x] Phase 2: Implement CLI subcommands `plan validate` and `plan render` (with `--json` and `--mermaid`) in `crates/ep`.
+- [x] Phase 2: Implement CLI subcommands `wal inspect`, `wal replay`, `lanes status`, `mesh status`, and `serve` in `crates/ep`.
+- [x] Phase 3: Wire Portolan TCP waker client (`TcpWakerProbe`) and `WakerHealthGate` circuit breaker in `escapement-core::waker` and `escapement-serve`.
+- [x] Phase 4: Construct deterministic property-based verification harnesses across `ep-domain` and `escapement-core`.
 - [ ] Phase 5: Prepare standalone Crates.io release packages.
 
 ## Verification

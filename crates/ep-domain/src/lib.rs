@@ -1515,4 +1515,148 @@ mod tests {
         assert_eq!(max_pool_inflight(4, 100, 2), 8);
         assert_eq!(max_pool_inflight(4, 6, 2), 6);
     }
+
+    fn next_u64(state: &mut u64) -> u64 {
+        let mut x = *state;
+        x ^= x >> 12;
+        x ^= x << 25;
+        x ^= x >> 27;
+        *state = x;
+        x.wrapping_mul(0x2545_F491_4F6C_DD1D)
+    }
+
+    #[test]
+    fn prop_token_bucket_never_exceeds_capacity_or_underflows() {
+        let mut seed = 0xDEAD_BEEF_CAFE_BABEu64;
+        for _ in 0..2000 {
+            let cap = (next_u64(&mut seed) % 500) + 1;
+            let refill = next_u64(&mut seed) % 50;
+            let init = next_u64(&mut seed) % (cap + 50);
+            let mut bucket = TokenBucket::with_initial(cap, init, refill, Tick(0));
+            assert!(bucket.available <= cap);
+
+            let mut now = 0u64;
+            for _ in 0..20 {
+                // Sometimes advance clock, sometimes keep same or earlier tick
+                let delta = (next_u64(&mut seed) % 10) as i64 - 2;
+                let probe_tick = if delta < 0 {
+                    now.saturating_sub(delta.unsigned_abs())
+                } else {
+                    now.saturating_add(delta as u64)
+                };
+                if probe_tick > now {
+                    now = probe_tick;
+                }
+                let cost = next_u64(&mut seed) % (cap + 20);
+                let before = bucket.tokens(probe_tick);
+                assert!(before <= cap);
+                match bucket.try_acquire(Tick(probe_tick), cost) {
+                    ValveDecision::Permit { remaining } => {
+                        assert!(cost > 0);
+                        assert!(cost <= before);
+                        assert_eq!(remaining, before - cost);
+                        assert_eq!(bucket.available, remaining);
+                    }
+                    ValveDecision::Hold { .. } => {
+                        assert!(cost == 0 || cost > before);
+                        assert_eq!(bucket.available, before);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn prop_resolve_pool_job_state_totality_and_retry_bounds() {
+        let statuses = [
+            PoolMessageStatus::Unread,
+            PoolMessageStatus::Pending,
+            PoolMessageStatus::Acked,
+            PoolMessageStatus::DeadLettered,
+        ];
+        let outcomes = [
+            None,
+            Some(PoolResultOutcome::Ok),
+            Some(PoolResultOutcome::Transient),
+            Some(PoolResultOutcome::Permanent),
+        ];
+
+        for status in statuses {
+            for outcome in outcomes {
+                for attempt in 1..=6u32 {
+                    for max_retries in 1..=5u32 {
+                        let res_refs = outcome.map(|o| {
+                            PoolResultRefs::new(1, "task-prop", attempt, o, None, None).unwrap()
+                        });
+                        let resolution =
+                            resolve_pool_job_state(status, res_refs.as_ref(), attempt, max_retries);
+                        match (outcome, status, resolution) {
+                            (Some(PoolResultOutcome::Ok), _, JobResolution::Completed) => {}
+                            (
+                                Some(PoolResultOutcome::Permanent),
+                                _,
+                                JobResolution::DeadLetter { .. },
+                            ) => {}
+                            (
+                                Some(PoolResultOutcome::Transient),
+                                _,
+                                JobResolution::Requeue { next_attempt },
+                            ) => {
+                                assert!(attempt < max_retries);
+                                assert_eq!(next_attempt, attempt + 1);
+                            }
+                            (
+                                Some(PoolResultOutcome::Transient),
+                                _,
+                                JobResolution::DeadLetter { .. },
+                            ) => {
+                                assert!(attempt >= max_retries);
+                            }
+                            (
+                                None,
+                                PoolMessageStatus::Unread
+                                | PoolMessageStatus::Pending
+                                | PoolMessageStatus::Acked,
+                                JobResolution::InFlight,
+                            ) => {}
+                            (
+                                None,
+                                PoolMessageStatus::DeadLettered,
+                                JobResolution::Requeue { next_attempt },
+                            ) => {
+                                assert!(attempt < max_retries);
+                                assert_eq!(next_attempt, attempt + 1);
+                            }
+                            (
+                                None,
+                                PoolMessageStatus::DeadLettered,
+                                JobResolution::DeadLetter { .. },
+                            ) => {
+                                assert!(attempt >= max_retries);
+                            }
+                            other => panic!("unexpected state resolution: {other:?}"),
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn prop_max_pool_inflight_bounded_by_provider_cap() {
+        let mut seed = 0x1234_5678_9ABC_DEF0u64;
+        for _ in 0..2000 {
+            let members = (next_u64(&mut seed) % 64) as usize;
+            let cap = (next_u64(&mut seed) % 128) as usize;
+            let mult = (next_u64(&mut seed) % 8) as usize;
+            let bound = max_pool_inflight(members, cap, mult);
+            assert!(bound <= cap);
+            if cap == 0 {
+                assert_eq!(bound, 0);
+            } else {
+                assert!(bound >= 1);
+                assert_eq!(bound, members.max(1).saturating_mul(mult.max(1)).min(cap));
+            }
+        }
+    }
 }

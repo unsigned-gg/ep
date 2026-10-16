@@ -208,6 +208,8 @@ fn handle_dispatch(
             (409, json_error("invalid state transition"), span)
         }
         Err(OrchestratorError::InvalidPoolRefs(msg)) => (400, json_error(&msg), span),
+        Err(OrchestratorError::WakerUnhealthy(msg)) => (503, json_error(&msg), span),
+        Err(OrchestratorError::PoolTransport(msg)) => (502, json_error(&msg), span),
     }
 }
 

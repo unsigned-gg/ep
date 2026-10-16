@@ -402,4 +402,62 @@ mod tests {
         assert!(pos("c") < pos("d"));
         assert_eq!(pos("d"), 3); // leaf last
     }
+
+    fn next_u64(state: &mut u64) -> u64 {
+        let mut x = *state;
+        x ^= x >> 12;
+        x ^= x << 25;
+        x ^= x >> 27;
+        *state = x;
+        x.wrapping_mul(0x2545_F491_4F6C_DD1D)
+    }
+
+    #[test]
+    fn prop_random_dags_satisfy_topological_dependency_and_permutation_invariance() {
+        let mut seed = 0xCAFE_F00D_0123_4567u64;
+        for _ in 0..500 {
+            let n = ((next_u64(&mut seed) % 15) + 1) as usize;
+            let mut nodes = Vec::with_capacity(n);
+            for i in 0..n {
+                let id_str = format!("n{i:02}");
+                let mut needs = Vec::new();
+                for j in 0..i {
+                    if next_u64(&mut seed).is_multiple_of(3) {
+                        needs.push(TaskId::new(format!("n{j:02}")).unwrap());
+                    }
+                }
+                let pri = (next_u64(&mut seed) % 10) as u8;
+                nodes.push(PlanNode::new(task(&id_str, "build", pri)).with_needs(needs));
+            }
+
+            let plan = Plan::from_nodes(nodes.clone()).unwrap();
+            let topo = plan.topological_order();
+            assert_eq!(topo.len(), n);
+
+            // Every dependency must appear strictly earlier in topological_order.
+            let mut pos_map = std::collections::BTreeMap::new();
+            for (idx, item) in topo.iter().enumerate() {
+                pos_map.insert(item.task.id.as_str(), idx);
+            }
+            for item in &topo {
+                let my_pos = pos_map[item.task.id.as_str()];
+                for dep in &item.needs {
+                    let dep_pos = pos_map[dep.as_str()];
+                    assert!(dep_pos < my_pos);
+                }
+            }
+
+            // Reversing/permuting input nodes produces identical topological order.
+            let mut reversed = nodes;
+            reversed.reverse();
+            let plan_rev = Plan::from_nodes(reversed).unwrap();
+            let ids_a: Vec<&str> = topo.iter().map(|x| x.task.id.as_str()).collect();
+            let ids_b: Vec<&str> = plan_rev
+                .topological_order()
+                .iter()
+                .map(|x| x.task.id.as_str())
+                .collect();
+            assert_eq!(ids_a, ids_b);
+        }
+    }
 }

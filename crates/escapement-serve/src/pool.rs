@@ -167,9 +167,215 @@ fn parse_json_u64(json: &str, field: &str) -> Option<u64> {
     rest[..end].parse().ok()
 }
 
+/// Pluggable transport driver for Cortex mesh capability pools (`pool:<slug>`).
+pub trait CortexPoolDriver {
+    /// Dispatch a message to `pool:<slug>` (`POST /v1/mesh/messages`).
+    ///
+    /// # Errors
+    /// Returns an error description if the transport fails or the response violates the contract.
+    fn send_pool(&mut self, req: &PoolSendRequest) -> Result<PoolSendResponse, String>;
+
+    /// Query delivery status (`GET /v1/mesh/message-status?peer_id=<uuid>&pool=<slug>&stream_seq=<n>`).
+    ///
+    /// # Errors
+    /// Returns an error description if the transport fails or the status payload is malformed.
+    fn message_status(
+        &self,
+        peer_id: &str,
+        pool: &CapabilitySlug,
+        stream_seq: u64,
+    ) -> Result<PoolStatusView, String>;
+}
+
+/// Deterministic in-memory [`CortexPoolDriver`] for unit tests and dry-run simulations.
+#[derive(Debug, Default, Clone)]
+pub struct InMemoryCortexPoolDriver {
+    next_seq: u64,
+    sent: Vec<PoolSendRequest>,
+    statuses: std::collections::BTreeMap<(String, u64), PoolStatusView>,
+}
+
+impl InMemoryCortexPoolDriver {
+    /// Create a new in-memory driver starting at `stream_seq = 1`.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            next_seq: 1,
+            sent: Vec::new(),
+            statuses: std::collections::BTreeMap::new(),
+        }
+    }
+
+    /// Return all requests dispatched through this driver.
+    #[must_use]
+    pub fn sent_requests(&self) -> &[PoolSendRequest] {
+        &self.sent
+    }
+
+    /// Override the status returned for `(pool_slug, stream_seq)`.
+    pub fn set_status(&mut self, pool: &CapabilitySlug, stream_seq: u64, view: PoolStatusView) {
+        self.statuses
+            .insert((pool.as_str().to_string(), stream_seq), view);
+    }
+}
+
+impl CortexPoolDriver for InMemoryCortexPoolDriver {
+    fn send_pool(&mut self, req: &PoolSendRequest) -> Result<PoolSendResponse, String> {
+        if self.next_seq == 0 {
+            self.next_seq = 1;
+        }
+        let seq = self.next_seq;
+        if seq > MAX_SAFE_STRUCT_INT {
+            return Err(format!("stream_seq overflow: {seq}"));
+        }
+        self.next_seq += 1;
+        self.sent.push(req.clone());
+        self.statuses.insert(
+            (req.pool.as_str().to_string(), seq),
+            PoolStatusView {
+                status: PoolMessageStatus::Unread,
+                member: None,
+                deliveries: 1,
+            },
+        );
+        Ok(PoolSendResponse {
+            message_id: format!("mem-msg-{seq}"),
+            stream_seq: seq,
+        })
+    }
+
+    fn message_status(
+        &self,
+        _peer_id: &str,
+        pool: &CapabilitySlug,
+        stream_seq: u64,
+    ) -> Result<PoolStatusView, String> {
+        self.statuses
+            .get(&(pool.as_str().to_string(), stream_seq))
+            .cloned()
+            .ok_or_else(|| {
+                format!(
+                    "no pool message status for {}:{}",
+                    pool.as_str(),
+                    stream_seq
+                )
+            })
+    }
+}
+
+/// Live HTTP/1.1 [`CortexPoolDriver`] backed by `std::net::TcpStream`.
+#[derive(Debug, Clone)]
+pub struct HttpCortexPoolDriver {
+    endpoint_addr: String,
+    bearer_token: Option<String>,
+    timeout_ms: u64,
+}
+
+impl HttpCortexPoolDriver {
+    /// Create a live HTTP driver targeting `endpoint_addr` (e.g. `"127.0.0.1:9400"` or `"http://127.0.0.1:9400"`).
+    #[must_use]
+    pub fn new(
+        endpoint_addr: impl Into<String>,
+        bearer_token: Option<String>,
+        timeout_ms: u64,
+    ) -> Self {
+        let raw = endpoint_addr.into();
+        let stripped = raw
+            .trim_start_matches("http://")
+            .trim_start_matches("https://")
+            .trim_end_matches('/')
+            .to_string();
+        Self {
+            endpoint_addr: stripped,
+            bearer_token,
+            timeout_ms: timeout_ms.clamp(50, 30_000),
+        }
+    }
+
+    fn request(&self, method: &str, path: &str, body: Option<&str>) -> Result<String, String> {
+        use std::io::{Read, Write};
+        use std::net::{TcpStream, ToSocketAddrs};
+        use std::time::Duration;
+
+        let timeout = Duration::from_millis(self.timeout_ms);
+        let addr = self
+            .endpoint_addr
+            .to_socket_addrs()
+            .map_err(|e| format!("resolve {}: {e}", self.endpoint_addr))?
+            .next()
+            .ok_or_else(|| format!("no socket address for {}", self.endpoint_addr))?;
+
+        let mut stream =
+            TcpStream::connect_timeout(&addr, timeout).map_err(|e| format!("connect: {e}"))?;
+        let _ = stream.set_read_timeout(Some(timeout));
+        let _ = stream.set_write_timeout(Some(timeout));
+
+        let auth_header = match &self.bearer_token {
+            Some(tok) if !tok.is_empty() => format!("Authorization: Bearer {tok}\r\n"),
+            _ => String::new(),
+        };
+        let payload = body.unwrap_or("");
+        let http_req = format!(
+            "{method} {path} HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\n{auth_header}Content-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+            self.endpoint_addr,
+            payload.len()
+        );
+
+        stream
+            .write_all(http_req.as_bytes())
+            .map_err(|e| format!("write: {e}"))?;
+        stream.flush().map_err(|e| format!("flush: {e}"))?;
+
+        let mut raw_resp = String::new();
+        stream
+            .read_to_string(&mut raw_resp)
+            .map_err(|e| format!("read: {e}"))?;
+
+        let (head, resp_body) = raw_resp
+            .split_once("\r\n\r\n")
+            .ok_or_else(|| "malformed HTTP response from Cortex".to_string())?;
+        let status_line = head.lines().next().unwrap_or("");
+        let status_code: u16 = status_line
+            .split_whitespace()
+            .nth(1)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(500);
+
+        if !(200..300).contains(&status_code) {
+            return Err(format!("cortex HTTP {status_code}: {resp_body}"));
+        }
+        Ok(resp_body.to_string())
+    }
+}
+
+impl CortexPoolDriver for HttpCortexPoolDriver {
+    fn send_pool(&mut self, req: &PoolSendRequest) -> Result<PoolSendResponse, String> {
+        let json_body = serialize_pool_send_body(req);
+        let resp = self.request("POST", "/v1/mesh/messages", Some(&json_body))?;
+        parse_pool_send_response(&resp)
+    }
+
+    fn message_status(
+        &self,
+        peer_id: &str,
+        pool: &CapabilitySlug,
+        stream_seq: u64,
+    ) -> Result<PoolStatusView, String> {
+        let path = format!(
+            "/v1/mesh/message-status?peer_id={peer_id}&pool={}&stream_seq={stream_seq}",
+            pool.as_str()
+        );
+        let resp = self.request("GET", &path, None)?;
+        parse_pool_status_response(&resp)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::net::TcpListener;
+    use std::thread;
 
     #[test]
     fn serialize_pool_send_body_formats_recipient_and_refs() {
@@ -225,5 +431,72 @@ mod tests {
         assert_eq!(res.task_id, "t-42");
         assert_eq!(res.attempt, 1);
         assert_eq!(res.outcome, PoolResultOutcome::Ok);
+    }
+
+    #[test]
+    fn http_cortex_pool_driver_round_trips_send_and_status_over_tcp() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let server = thread::spawn(move || {
+            for idx in 0..2 {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut req_line = String::new();
+                reader.read_line(&mut req_line).unwrap();
+                let mut content_len = 0usize;
+                loop {
+                    let mut line = String::new();
+                    reader.read_line(&mut line).unwrap();
+                    if line.trim().is_empty() {
+                        break;
+                    }
+                    if let Some(rest) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                        content_len = rest.trim().parse().unwrap_or(0);
+                    }
+                }
+                if content_len > 0 {
+                    let mut buf = vec![0u8; content_len];
+                    reader.read_exact(&mut buf).unwrap();
+                }
+
+                let body = if idx == 0 {
+                    assert!(req_line.starts_with("POST /v1/mesh/messages "));
+                    r#"{"id":"cortex-uuid-99","stream_seq":99}"#
+                } else {
+                    assert!(req_line.starts_with(
+                        "GET /v1/mesh/message-status?peer_id=peer-1&pool=build&stream_seq=99 "
+                    ));
+                    r#"{"pool":"build","stream_seq":99,"status":"pending","member":"rev-worker-1","deliveries":1}"#
+                };
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream.write_all(resp.as_bytes()).unwrap();
+                stream.flush().unwrap();
+            }
+        });
+
+        let mut driver = HttpCortexPoolDriver::new(addr.to_string(), Some("tok-test".into()), 2000);
+        let slug = CapabilitySlug::new("build").unwrap();
+        let refs = PoolDeliveryRefs::new(slug.clone(), 1, "t-99", 1, None).unwrap();
+        let send_resp = driver
+            .send_pool(&PoolSendRequest {
+                pool: slug.clone(),
+                subject: "dispatch t-99".into(),
+                body: "cargo test -j 2".into(),
+                refs,
+            })
+            .unwrap();
+        assert_eq!(send_resp.message_id, "cortex-uuid-99");
+        assert_eq!(send_resp.stream_seq, 99);
+
+        let status_view = driver.message_status("peer-1", &slug, 99).unwrap();
+        assert_eq!(status_view.status, PoolMessageStatus::Pending);
+        assert_eq!(status_view.member.as_deref(), Some("rev-worker-1"));
+        assert_eq!(status_view.deliveries, 1);
+
+        server.join().unwrap();
     }
 }

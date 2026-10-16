@@ -243,4 +243,59 @@ mod tests {
         assert!(s.contains("abc123"));
         assert!(s.contains("2 entries"));
     }
+
+    fn next_u64(state: &mut u64) -> u64 {
+        let mut x = *state;
+        x ^= x >> 12;
+        x ^= x << 25;
+        x ^= x >> 27;
+        *state = x;
+        x.wrapping_mul(0x2545_F491_4F6C_DD1D)
+    }
+
+    fn random_changeset(seed: &mut u64, run_name: &str) -> Changeset {
+        let mut cs = Changeset::new(run_name);
+        let count = (next_u64(seed) % 8) as usize;
+        for _ in 0..count {
+            let path_idx = next_u64(seed) % 10;
+            let hash_idx = next_u64(seed) % 1000;
+            cs.set(
+                format!("src/file_{path_idx}.rs"),
+                format!("blob_{hash_idx}"),
+            );
+        }
+        cs
+    }
+
+    #[test]
+    fn prop_changeset_merge_idempotence_associativity_and_domain_union() {
+        let mut seed = 0xBADC_0FFE_EE00_1122u64;
+        for _ in 0..1000 {
+            let a = random_changeset(&mut seed, "a");
+            let b = random_changeset(&mut seed, "b");
+            let c = random_changeset(&mut seed, "c");
+
+            // 1. Idempotence on entries: merge(A, A).entries == A.entries
+            let aa = merge_overlapping(&a, &a);
+            assert_eq!(aa.entries, a.entries);
+
+            // 2. Associativity on entries: merge(merge(A, B), C).entries == merge(A, merge(B, C)).entries
+            let ab_c = merge_overlapping(&merge_overlapping(&a, &b), &c);
+            let a_bc = merge_overlapping(&a, &merge_overlapping(&b, &c));
+            assert_eq!(ab_c.entries, a_bc.entries);
+
+            // 3. Domain union: keys(merge(A, B)) == keys(A) U keys(B)
+            let ab = merge_overlapping(&a, &b);
+            for k in a.entries.keys().chain(b.entries.keys()) {
+                assert!(ab.entries.contains_key(k));
+            }
+            for (k, v) in &ab.entries {
+                if let Some(bv) = b.entries.get(k) {
+                    assert_eq!(v, bv);
+                } else {
+                    assert_eq!(Some(v), a.entries.get(k));
+                }
+            }
+        }
+    }
 }
