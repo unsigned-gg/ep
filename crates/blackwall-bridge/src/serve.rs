@@ -67,7 +67,7 @@ impl Default for ServeConfig {
             token: None,
             project: "default".into(),
             default_provider: "gateway".into(),
-            default_model: "zai/GLM-5.2".into(),
+            default_model: "glm-5.2".into(),
             default_max_turns: 20,
         }
     }
@@ -571,7 +571,7 @@ mod tests {
         assert!(config.token.is_none());
         assert_eq!(config.project, "default");
         assert_eq!(config.default_provider, "gateway");
-        assert_eq!(config.default_model, "zai/GLM-5.2");
+        assert_eq!(config.default_model, "glm-5.2");
         assert_eq!(config.default_max_turns, 20);
     }
 
@@ -602,7 +602,7 @@ mod tests {
         assert_eq!(req.project, "default");
         assert_eq!(req.task.as_deref(), Some("t1"));
         assert_eq!(req.provider, "gateway");
-        assert_eq!(req.model, "zai/GLM-5.2");
+        assert_eq!(req.model, "glm-5.2");
         assert_eq!(req.max_turns, 20);
         assert!(!req.no_jail);
         assert!(req.max_tokens.is_none());
@@ -629,7 +629,7 @@ mod tests {
         assert_eq!(json["prompt"], req.prompt);
         assert_eq!(json["task"], "spawn-1");
         assert_eq!(json["provider"], "gateway");
-        assert_eq!(json["model"], "zai/GLM-5.2");
+        assert_eq!(json["model"], "glm-5.2");
         assert_eq!(json["no_jail"], false);
         assert_eq!(json["var"], serde_json::json!([]));
         assert_eq!(json["max_turns"], 20);

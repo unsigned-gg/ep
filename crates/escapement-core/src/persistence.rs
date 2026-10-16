@@ -41,6 +41,12 @@ pub struct WalEntry {
     pub capability: Option<String>,
     /// The task priority, if recorded.
     pub priority: Option<u8>,
+    /// The Cortex mesh pool slug (`workstreams/<slug>`), if dispatched to a pool.
+    pub pool: Option<String>,
+    /// The Cortex mesh `stream_seq` cursor, if dispatched to a pool.
+    pub stream_seq: Option<u64>,
+    /// The 1-indexed attempt number, if dispatched to a pool.
+    pub attempt: Option<u32>,
 }
 
 /// The type of queue mutation.
@@ -50,6 +56,8 @@ pub enum WalOp {
     Submit,
     /// A task was dispatched to an agent.
     Dispatch,
+    /// A task was dispatched to a Cortex mesh pool (`workstreams/<slug>`).
+    PoolDispatch,
     /// A task completed successfully.
     Complete,
     /// A task failed.
@@ -65,6 +73,7 @@ impl fmt::Display for WalOp {
         match self {
             Self::Submit => write!(f, "submit"),
             Self::Dispatch => write!(f, "dispatch"),
+            Self::PoolDispatch => write!(f, "pool_dispatch"),
             Self::Complete => write!(f, "complete"),
             Self::Fail => write!(f, "fail"),
             Self::Cancel => write!(f, "cancel"),
@@ -78,6 +87,7 @@ impl WalOp {
         match s {
             "submit" => Some(Self::Submit),
             "dispatch" => Some(Self::Dispatch),
+            "pool_dispatch" => Some(Self::PoolDispatch),
             "complete" => Some(Self::Complete),
             "fail" => Some(Self::Fail),
             "cancel" => Some(Self::Cancel),
@@ -97,6 +107,9 @@ impl WalEntry {
             agent_id: None,
             capability: Some(capability.into()),
             priority: Some(priority),
+            pool: None,
+            stream_seq: None,
+            attempt: None,
         }
     }
 
@@ -109,6 +122,29 @@ impl WalEntry {
             agent_id: Some(agent_id),
             capability: None,
             priority: None,
+            pool: None,
+            stream_seq: None,
+            attempt: None,
+        }
+    }
+
+    /// Create a pool dispatch entry recording the Cortex `workstreams/<slug>` assignment.
+    #[must_use]
+    pub fn pool_dispatch(
+        task_id: TaskId,
+        pool: impl Into<String>,
+        stream_seq: u64,
+        attempt: u32,
+    ) -> Self {
+        Self {
+            op: WalOp::PoolDispatch,
+            task_id,
+            agent_id: None,
+            capability: None,
+            priority: None,
+            pool: Some(pool.into()),
+            stream_seq: Some(stream_seq),
+            attempt: Some(attempt),
         }
     }
 
@@ -121,6 +157,24 @@ impl WalEntry {
             agent_id: Some(agent_id),
             capability: None,
             priority: None,
+            pool: None,
+            stream_seq: None,
+            attempt: None,
+        }
+    }
+
+    /// Create a fail entry.
+    #[must_use]
+    pub fn fail(task_id: TaskId, agent_id: Option<AgentId>) -> Self {
+        Self {
+            op: WalOp::Fail,
+            task_id,
+            agent_id,
+            capability: None,
+            priority: None,
+            pool: None,
+            stream_seq: None,
+            attempt: None,
         }
     }
 }
@@ -142,8 +196,17 @@ pub fn serialize_entry(entry: &WalEntry) -> String {
     if let Some(pri) = entry.priority {
         parts.push(format!(r#""priority":{pri}"#));
     }
+    if let Some(ref pool) = entry.pool {
+        parts.push(format!(r#""pool":"{pool}""#));
+    }
+    if let Some(seq) = entry.stream_seq {
+        parts.push(format!(r#""stream_seq":{seq}"#));
+    }
+    if let Some(attempt) = entry.attempt {
+        parts.push(format!(r#""attempt":{attempt}"#));
+    }
 
-    format!("{{{{{}}}}}", parts.join(","))
+    format!("{{{}}}", parts.join(","))
 }
 
 /// Write a WAL entry to a writer (with trailing newline).
@@ -184,6 +247,9 @@ pub fn deserialize_entry(line: &str) -> Result<WalEntry, PersistenceError> {
 
     let capability = parse_json_field(line, "capability");
     let priority = parse_json_numeric_field(line, "priority");
+    let pool = parse_json_field(line, "pool");
+    let stream_seq = parse_json_u64_field(line, "stream_seq");
+    let attempt = parse_json_u64_field(line, "attempt").and_then(|v| u32::try_from(v).ok());
 
     Ok(WalEntry {
         op,
@@ -191,6 +257,9 @@ pub fn deserialize_entry(line: &str) -> Result<WalEntry, PersistenceError> {
         agent_id,
         capability,
         priority,
+        pool,
+        stream_seq,
+        attempt,
     })
 }
 
@@ -215,7 +284,7 @@ pub fn replay(reader: impl BufRead) -> Result<Vec<WalEntry>, PersistenceError> {
 /// Returns:
 /// - `task_specs`: the tasks that were submitted (id → (capability, priority))
 /// - `completed`: task ids that completed
-/// - `dispatched`: task ids currently dispatched (in flight at crash time)
+/// - `in_flight`: task ids currently dispatched (in flight at crash time)
 #[must_use]
 pub fn reconstruct(entries: &[WalEntry]) -> RecoveredState {
     let mut task_specs: BTreeMap<TaskId, (String, u8)> = BTreeMap::new();
@@ -229,7 +298,7 @@ pub fn reconstruct(entries: &[WalEntry]) -> RecoveredState {
                     task_specs.insert(entry.task_id.clone(), (cap.clone(), pri));
                 }
             }
-            WalOp::Dispatch => {
+            WalOp::Dispatch | WalOp::PoolDispatch => {
                 dispatched.push(entry.task_id.clone());
             }
             WalOp::Complete => {
@@ -295,10 +364,14 @@ fn parse_json_field(output: &str, field: &str) -> Option<String> {
 
 /// Extract a numeric field value from a simple JSON object.
 fn parse_json_numeric_field(output: &str, field: &str) -> Option<u8> {
+    parse_json_u64_field(output, field).and_then(|v| u8::try_from(v).ok())
+}
+
+/// Extract an unsigned 64-bit integer field value from a simple JSON object.
+fn parse_json_u64_field(output: &str, field: &str) -> Option<u64> {
     let marker = format!("\"{field}\":");
     let start = output.find(&marker)?;
     let rest = &output[start + marker.len()..];
-    // Read until we hit a non-digit character.
     let end = rest.find(|c: char| !c.is_ascii_digit())?;
     rest[..end].parse().ok()
 }
@@ -452,5 +525,18 @@ mod tests {
         let state1 = reconstruct(&entries);
         let state2 = reconstruct(&entries);
         assert_eq!(state1, state2);
+    }
+
+    #[test]
+    fn round_trip_pool_dispatch() {
+        let entry = WalEntry::pool_dispatch(TaskId::new("t3").unwrap(), "build", 42, 1);
+        let json = serialize_entry(&entry);
+        let parsed = deserialize_entry(&json).unwrap();
+        assert_eq!(parsed, entry);
+        let state = reconstruct(&[
+            WalEntry::submit(TaskId::new("t3").unwrap(), "build", 5),
+            entry,
+        ]);
+        assert_eq!(state.in_flight, vec![TaskId::new("t3").unwrap()]);
     }
 }

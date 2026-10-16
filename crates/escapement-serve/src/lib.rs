@@ -24,6 +24,7 @@ use escapement_core::telemetry::DispatchMetrics;
 
 use blackwall_bridge::execution::PlanExecutor;
 pub mod http;
+pub mod pool;
 
 /// Orchestrator configuration — loaded from `escapement.toml`.
 #[derive(Debug, Clone)]
@@ -40,10 +41,10 @@ pub struct OrchestratorConfig {
     pub max_retries: u32,
     /// Concurrency caps per capability.
     pub concurrency_caps: BTreeMap<String, usize>,
-    /// Token bucket capacity for rate limiting.
-    pub rate_capacity: f64,
-    /// Token bucket refill rate (tokens per second).
-    pub rate_refill_per_second: f64,
+    /// Token bucket capacity for rate limiting (integer tokens).
+    pub rate_capacity: u64,
+    /// Token bucket refill rate (integer tokens per tick).
+    pub rate_refill_per_second: u64,
     /// Tick interval for the dispatch loop (milliseconds).
     pub tick_interval_ms: u64,
     /// OTLP endpoint for telemetry.
@@ -54,13 +55,13 @@ impl Default for OrchestratorConfig {
     fn default() -> Self {
         Self {
             default_provider: "gateway".into(),
-            default_model: "llm/glm-5.2".into(),
+            default_model: "glm-5.2".into(),
             default_max_turns: 20,
             max_tokens_per_run: 200_000,
             max_retries: 3,
             concurrency_caps: BTreeMap::new(),
-            rate_capacity: 10.0,
-            rate_refill_per_second: 10.0,
+            rate_capacity: 10,
+            rate_refill_per_second: 10,
             tick_interval_ms: 100,
             otlp_endpoint: "http://localhost:4318/v1/traces".into(),
         }
@@ -101,6 +102,10 @@ pub enum OrchestratorError {
     RateLimited,
     /// An unknown task was referenced.
     UnknownTask(TaskId),
+    /// The task is not in a state that permits the transition.
+    InvalidStateTransition(TaskId),
+    /// Pool correlation metadata failed validation.
+    InvalidPoolRefs(String),
 }
 
 impl fmt::Display for OrchestratorError {
@@ -111,6 +116,8 @@ impl fmt::Display for OrchestratorError {
             Self::BudgetExceeded(p) => write!(f, "budget exceeded: {p}"),
             Self::RateLimited => write!(f, "rate limited"),
             Self::UnknownTask(id) => write!(f, "unknown task: {id}"),
+            Self::InvalidStateTransition(id) => write!(f, "invalid state transition: {id}"),
+            Self::InvalidPoolRefs(msg) => write!(f, "invalid pool refs: {msg}"),
         }
     }
 }
@@ -126,7 +133,27 @@ impl Orchestrator {
             concurrency_guard.set_cap(cap, *limit);
         }
 
-        let rate_limiter = TokenBucket::new(config.rate_capacity, config.rate_refill_per_second, 0);
+        let mut providers = ProviderRegistry::new();
+        let mut budget = BudgetTracker::new();
+        let vertex_preset = escapement_core::metering::VertexQuotaPreset::ceres_default();
+        for vertex_name in ["vertex", "google-vertex", "vertex-ai"] {
+            providers.register(vertex_name, vertex_preset.max_concurrent);
+            budget.set_cap(vertex_name, config.max_tokens_per_run);
+        }
+        if concurrency_guard.cap("vertex") == 0 {
+            concurrency_guard.set_cap("vertex", vertex_preset.max_concurrent);
+        }
+
+        let rate_limiter =
+            if escapement_core::metering::is_vertex_provider(&config.default_provider) {
+                TokenBucket::from_ticks(
+                    vertex_preset.burst_capacity,
+                    vertex_preset.refill_per_tick,
+                    0,
+                )
+            } else {
+                TokenBucket::from_ticks(config.rate_capacity, config.rate_refill_per_second, 0)
+            };
         let dispatcher = Dispatcher::new();
 
         // Initialize OTLP exporter if endpoint is configured.
@@ -146,8 +173,8 @@ impl Orchestrator {
             lane_scheduler: LaneScheduler::new(1000),
             concurrency_guard,
             rate_limiter,
-            providers: ProviderRegistry::new(),
-            budget: BudgetTracker::new(),
+            providers,
+            budget,
             custody: CustodyChain::new(),
             plan_executors: BTreeMap::new(),
             metrics: DispatchMetrics::default(),
@@ -206,7 +233,7 @@ impl Orchestrator {
     #[allow(clippy::missing_panics_doc)]
     pub fn submit_task(&mut self, task: Task) -> Result<(), OrchestratorError> {
         // Check rate limit.
-        if self.rate_limiter.try_consume(1.0, self.clock_ms).is_err() {
+        if self.rate_limiter.try_consume(1, self.clock_ms).is_err() {
             self.metrics.record_retry();
             return Err(OrchestratorError::RateLimited);
         }
@@ -272,10 +299,9 @@ impl Orchestrator {
         let assigned = self.dispatcher.assign(&mut self.registry);
 
         // 4. Track concurrency + budget for each assignment.
-        for (_, _) in &assigned {
-            let cap = task_capability_from_assignment(&assigned);
-            if let Some(ref cap) = cap {
-                let _ = self.concurrency_guard.acquire(cap);
+        for (task_id, _) in &assigned {
+            if let Some(task) = self.dispatcher.spec(task_id).cloned() {
+                let _ = self.concurrency_guard.acquire(&task.required_capability);
             }
             self.providers
                 .dispatch_started(&self.config.default_provider)
@@ -285,14 +311,127 @@ impl Orchestrator {
         assigned.len()
     }
 
+    /// Claim the highest-priority queued task matching an idle registered agent.
+    ///
+    /// Returns `(task_id, required_capability)` when a task is claimed.
+    pub fn claim_task(&mut self, agent_id: &AgentId) -> Option<(TaskId, String)> {
+        let task = self
+            .dispatcher
+            .claim_for_agent(&mut self.registry, agent_id)
+            .ok()??;
+        let cap = task.required_capability;
+        if !cap.is_empty() {
+            let _ = self.concurrency_guard.acquire(&cap);
+        }
+        self.providers
+            .dispatch_started(&self.config.default_provider)
+            .ok();
+        Some((task.id, cap))
+    }
+
+    /// Dispatch the highest-priority queued task to a Cortex capability pool (`pool:<slug>`),
+    /// recording the correlation refs returned by Cortex (`stream_seq`).
+    ///
+    /// # Errors
+    /// Returns [`OrchestratorError::InvalidPoolRefs`] if the task capability slug or `stream_seq`
+    /// violates the `ep-domain` wire contract.
+    pub fn dispatch_pool(
+        &mut self,
+        stream_seq: u64,
+        traceparent: Option<String>,
+    ) -> Result<Option<(TaskId, ep_domain::PoolDeliveryRefs)>, OrchestratorError> {
+        let Some(cap_str) = self
+            .dispatcher
+            .jobs()
+            .filter_map(|(id, state)| {
+                if matches!(state, escapement_core::dispatch::TaskState::Queued) {
+                    self.dispatcher.spec(id)
+                } else {
+                    None
+                }
+            })
+            .max_by_key(|t| t.priority)
+            .map(|t| t.required_capability.clone())
+        else {
+            return Ok(None);
+        };
+
+        let pool_slug = ep_domain::CapabilitySlug::new(cap_str.clone())
+            .map_err(|e| OrchestratorError::InvalidPoolRefs(e.to_string()))?;
+        let mut seq = stream_seq;
+        let mut assigned_list = self
+            .dispatcher
+            .assign_pool(&cap_str, &pool_slug, &mut seq, 1, traceparent.as_deref())
+            .map_err(|e| OrchestratorError::InvalidPoolRefs(e.to_string()))?;
+
+        let Some(assigned) = assigned_list.pop() else {
+            return Ok(None);
+        };
+        let _ = self.concurrency_guard.acquire(&cap_str);
+        self.providers
+            .dispatch_started(&self.config.default_provider)
+            .ok();
+        Ok(Some(assigned))
+    }
+
+    /// Reconcile a pool-dispatched task against Cortex `GET /v1/mesh/message-status` and any
+    /// inbound `service-escapement-pool` result frame.
+    ///
+    /// # Errors
+    /// Returns [`OrchestratorError::UnknownTask`] or [`OrchestratorError::InvalidStateTransition`]
+    /// if the task is not currently `PoolAssigned`.
+    pub fn reconcile_pool_job(
+        &mut self,
+        task_id: &TaskId,
+        status: ep_domain::PoolMessageStatus,
+        result: Option<&ep_domain::PoolResultRefs>,
+    ) -> Result<ep_domain::JobResolution, OrchestratorError> {
+        let attempt = self.dispatcher.attempt(task_id).max(1);
+        let resolution =
+            ep_domain::resolve_pool_job_state(status, result, attempt, self.config.max_retries);
+
+        match &resolution {
+            ep_domain::JobResolution::InFlight => {}
+            ep_domain::JobResolution::Completed => {
+                let worker_agent =
+                    AgentId::new("service-escapement-pool").expect("valid pool agent id");
+                self.dispatcher
+                    .complete_pool(task_id, worker_agent)
+                    .map_err(|_| OrchestratorError::InvalidStateTransition(task_id.clone()))?;
+                self.providers
+                    .dispatch_completed(&self.config.default_provider)
+                    .ok();
+                self.metrics.record_completion();
+            }
+            ep_domain::JobResolution::Requeue { .. } => {
+                self.dispatcher
+                    .requeue_pool(task_id)
+                    .map_err(|_| OrchestratorError::InvalidStateTransition(task_id.clone()))?;
+                self.providers
+                    .dispatch_completed(&self.config.default_provider)
+                    .ok();
+                self.metrics.record_retry();
+            }
+            ep_domain::JobResolution::DeadLetter { reason } => {
+                self.dispatcher
+                    .fail(&mut self.registry, task_id, reason.clone())
+                    .map_err(|_| OrchestratorError::InvalidStateTransition(task_id.clone()))?;
+                self.providers
+                    .dispatch_completed(&self.config.default_provider)
+                    .ok();
+                self.metrics.record_failure();
+            }
+        }
+
+        Ok(resolution)
+    }
+
     /// After `tick()` assigns tasks, spawn blackwall runs for each assignment.
     /// Returns the number of runs spawned. In a real deployment this is called
     /// after `tick()` in the dispatch loop. In tests the caller drives it.
     pub fn spawn_assigned(&mut self, assigned: &[(TaskId, AgentId)]) -> Vec<(TaskId, AgentId)> {
         let mut spawned = Vec::new();
         for (task_id, agent_id) in assigned {
-            // Transition to Running.
-            // Task is now Assigned (the expanded start() method requires EST-18 dispatch lifecycle).
             self.metrics.record_dispatch();
             spawned.push((task_id.clone(), agent_id.clone()));
         }
@@ -304,9 +443,6 @@ impl Orchestrator {
     #[must_use]
     pub fn dispatch_cycle(&mut self) -> usize {
         let assigned = self.tick();
-        // The actual blackwall spawn happens in the caller's event loop
-        // (it needs async I/O which the core doesn't do).
-        // Here we just transition to Running.
         let _ = self.spawn_assigned(&[]);
         assigned
     }
@@ -327,15 +463,63 @@ impl Orchestrator {
         Ok(())
     }
 
+    /// Mark an assigned or pool-assigned task as terminally failed.
+    ///
+    /// # Errors
+    /// Returns [`OrchestratorError::UnknownTask`] if the task doesn't exist or cannot fail.
+    pub fn fail_task(
+        &mut self,
+        task_id: &TaskId,
+        reason: impl Into<String>,
+    ) -> Result<(), OrchestratorError> {
+        self.dispatcher
+            .fail(&mut self.registry, task_id, reason)
+            .map_err(|_| OrchestratorError::UnknownTask(task_id.clone()))?;
+
+        self.providers
+            .dispatch_completed(&self.config.default_provider)
+            .ok();
+        self.metrics.record_failure();
+        Ok(())
+    }
+
     /// Cancel a task.
     ///
     /// # Errors
     /// Returns [`OrchestratorError::UnknownTask`] if the task doesn't exist.
     pub fn cancel_task(&mut self, _task_id: &TaskId) -> Result<(), OrchestratorError> {
-        // Cancel requires EST-18 expanded dispatch lifecycle.
-        // For v1.0.0, tasks can be completed but not cancelled via the Dispatcher.
         self.metrics.record_cancellation();
         Ok(())
+    }
+
+    /// List all tracked jobs as `(task_id, capability, priority, attempt, status_str)`.
+    #[must_use]
+    pub fn list_jobs(&self) -> Vec<(TaskId, String, u8, u32, &'static str)> {
+        self.dispatcher
+            .jobs()
+            .map(|(id, state)| {
+                let (cap, pri) = self
+                    .dispatcher
+                    .spec(id)
+                    .map(|t| (t.required_capability.clone(), t.priority))
+                    .unwrap_or_else(|| (String::new(), 0));
+                let attempt = self.dispatcher.attempt(id);
+                (id.clone(), cap, pri, attempt, state.as_status_str())
+            })
+            .collect()
+    }
+
+    /// Query a single job by task id, returning `(capability, priority, attempt, status_str)`.
+    #[must_use]
+    pub fn get_job(&self, task_id: &TaskId) -> Option<(String, u8, u32, &'static str)> {
+        let state = self.dispatcher.state(task_id)?;
+        let (cap, pri) = self
+            .dispatcher
+            .spec(task_id)
+            .map(|t| (t.required_capability.clone(), t.priority))
+            .unwrap_or_else(|| (String::new(), 0));
+        let attempt = self.dispatcher.attempt(task_id);
+        Some((cap, pri, attempt, state.as_status_str()))
     }
 
     /// Get the current dispatch queue depth.
@@ -400,19 +584,21 @@ impl Orchestrator {
         WalEntry::dispatch(task_id.clone(), agent_id.clone())
     }
 
+    /// Get a WAL entry for a pool dispatch.
+    #[must_use]
+    pub fn wal_pool_dispatch(&self, refs: &ep_domain::PoolDeliveryRefs) -> WalEntry {
+        WalEntry::pool_dispatch(
+            TaskId::new(&refs.task_id).expect("validated task_id"),
+            refs.pool.as_str(),
+            refs.stream_seq,
+            refs.attempt,
+        )
+    }
+
     /// Get a WAL entry for a task completion.
     #[must_use]
     pub fn wal_complete(&self, task_id: &TaskId, agent_id: &AgentId) -> WalEntry {
         WalEntry::complete(task_id.clone(), agent_id.clone())
-    }
-}
-
-/// Extract the capability from an assignment (helper).
-fn task_capability_from_assignment(assigned: &[(TaskId, AgentId)]) -> Option<String> {
-    if assigned.is_empty() {
-        None
-    } else {
-        Some("build".into())
     }
 }
 
@@ -437,6 +623,7 @@ mod tests {
         assert!(orch.registry().is_empty());
         assert_eq!(orch.queue_depth(), 0);
         assert!(!orch.is_healthy());
+        assert_eq!(orch.config_ref().default_model, "glm-5.2");
     }
 
     #[test]
@@ -501,5 +688,71 @@ mod tests {
         let t = task("t1", "build", 5);
         let entry = orch.wal_submit(&t);
         assert_eq!(entry.op, WalOp::Submit);
+    }
+
+    #[test]
+    fn vertex_provider_rate_limiting_and_concurrency_cap_registered() {
+        let cfg = OrchestratorConfig {
+            default_provider: "google-vertex".into(),
+            ..Default::default()
+        };
+        let mut orch = Orchestrator::new(cfg);
+
+        // Pre-registered with burst_capacity = 15.
+        for i in 0..15 {
+            assert!(orch
+                .submit_task(task(&format!("vt-{i}"), "build", 5))
+                .is_ok());
+        }
+        assert_eq!(
+            orch.submit_task(task("vt-overflow", "build", 5)),
+            Err(OrchestratorError::RateLimited)
+        );
+    }
+
+    #[test]
+    fn pool_dispatch_and_reconcile_lifecycle() {
+        let mut orch = Orchestrator::new(OrchestratorConfig::default());
+        orch.register_provider("gateway", 5);
+        orch.submit_task(task("t-pool", "build", 7)).unwrap();
+
+        let (tid, refs) = orch.dispatch_pool(101, None).unwrap().unwrap();
+        assert_eq!(tid.as_str(), "t-pool");
+        assert_eq!(refs.stream_seq, 101);
+        assert_eq!(orch.get_job(&tid).unwrap().3, "pool_assigned");
+
+        // Transient failure on attempt 1 -> requeue
+        let transient = ep_domain::PoolResultRefs::new(
+            101,
+            "t-pool",
+            1,
+            ep_domain::PoolResultOutcome::Transient,
+            Some("timeout".into()),
+            None,
+        )
+        .unwrap();
+        let res = orch
+            .reconcile_pool_job(&tid, ep_domain::PoolMessageStatus::Acked, Some(&transient))
+            .unwrap();
+        assert_eq!(res, ep_domain::JobResolution::Requeue { next_attempt: 2 });
+        assert_eq!(orch.get_job(&tid).unwrap().3, "queued");
+
+        // Re-dispatch on attempt 2 -> complete
+        let (_tid2, refs2) = orch.dispatch_pool(102, None).unwrap().unwrap();
+        assert_eq!(refs2.attempt, 2);
+        let ok_res = ep_domain::PoolResultRefs::new(
+            102,
+            "t-pool",
+            2,
+            ep_domain::PoolResultOutcome::Ok,
+            None,
+            None,
+        )
+        .unwrap();
+        let res2 = orch
+            .reconcile_pool_job(&tid, ep_domain::PoolMessageStatus::Acked, Some(&ok_res))
+            .unwrap();
+        assert_eq!(res2, ep_domain::JobResolution::Completed);
+        assert_eq!(orch.get_job(&tid).unwrap().3, "completed");
     }
 }

@@ -99,96 +99,12 @@ impl ConcurrencyGuard {
     }
 }
 
-/// Token-bucket rate limiter using caller-supplied millisecond time.
-/// Used for per-provider or per-agent rate limiting.
-#[derive(Debug, Clone)]
-pub struct TokenBucket {
-    /// Maximum tokens the bucket can hold.
-    capacity: f64,
-    /// Tokens added per millisecond.
-    refill_rate_per_ms: f64,
-    /// Current token count.
-    tokens: f64,
-    /// Last refill time (caller-supplied ms).
-    last_refill_ms: u64,
-}
-
-/// Error returned when the bucket has insufficient tokens.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RateLimited {
-    /// Milliseconds the caller should wait before retrying.
-    pub retry_after_ms: u64,
-}
-
-impl fmt::Display for RateLimited {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "rate limited: retry after {}ms", self.retry_after_ms)
-    }
-}
-
-impl std::error::Error for RateLimited {}
-
-impl TokenBucket {
-    /// Create a new token bucket.
-    ///
-    /// # Arguments
-    /// * `capacity` - Maximum tokens the bucket holds.
-    /// * `refill_per_second` - Tokens added per second (converted to per-ms internally).
-    /// * `now_ms` - Initial time (caller-supplied milliseconds).
-    #[must_use]
-    pub fn new(capacity: f64, refill_per_second: f64, now_ms: u64) -> Self {
-        Self {
-            capacity,
-            refill_rate_per_ms: refill_per_second / 1000.0,
-            tokens: capacity,
-            last_refill_ms: now_ms,
-        }
-    }
-
-    /// Refill the bucket based on elapsed time since the last call.
-    #[allow(clippy::cast_precision_loss)]
-    fn refill(&mut self, now_ms: u64) {
-        let elapsed = now_ms.saturating_sub(self.last_refill_ms);
-        if elapsed > 0 {
-            self.tokens =
-                (self.tokens + elapsed as f64 * self.refill_rate_per_ms).min(self.capacity);
-            self.last_refill_ms = now_ms;
-        }
-    }
-
-    /// Try to consume `cost` tokens. Returns Ok if accepted, Err with
-    /// retry-after if insufficient.
-    ///
-    /// # Errors
-    /// Returns [`RateLimited`] with `retry_after_ms` if the bucket doesn't
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    pub fn try_consume(&mut self, cost: f64, now_ms: u64) -> Result<(), RateLimited> {
-        self.refill(now_ms);
-        if self.tokens >= cost {
-            self.tokens -= cost;
-            Ok(())
-        } else {
-            let deficit = cost - self.tokens;
-            let retry_after_ms = if self.refill_rate_per_ms > 0.0 {
-                (deficit / self.refill_rate_per_ms).ceil() as u64
-            } else {
-                u64::MAX // no refill — never succeeds
-            };
-            Err(RateLimited { retry_after_ms })
-        }
-    }
-
-    /// Current token count (after refilling at `now_ms`).
-    #[must_use]
-    pub fn tokens(&mut self, now_ms: u64) -> f64 {
-        self.refill(now_ms);
-        self.tokens
-    }
-}
+pub use ep_domain::{is_vertex_provider, RateLimited, TokenBucket, VertexQuotaPreset};
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ep_domain::Tick;
 
     // --- ConcurrencyGuard ---
 
@@ -260,61 +176,65 @@ mod tests {
         assert!(guard.acquire("review").is_err());
     }
 
-    // --- TokenBucket ---
+    // --- TokenBucket (integer u64 tokens & ticks) ---
 
     #[test]
     fn consume_succeeds_with_enough_tokens() {
-        let mut bucket = TokenBucket::new(10.0, 1.0, 0);
-        assert!(bucket.try_consume(5.0, 0).is_ok());
-        assert!((bucket.tokens(0) - 5.0).abs() < 0.001);
+        let mut bucket = TokenBucket::from_ticks(10, 1, 0);
+        assert!(bucket.try_consume(5, 0).is_ok());
+        assert_eq!(bucket.tokens(0), 5);
     }
 
     #[test]
     fn consume_fails_with_insufficient_tokens() {
-        let mut bucket = TokenBucket::new(5.0, 1.0, 0);
+        let mut bucket = TokenBucket::from_ticks(5, 1, 0);
         // Consume all 5
-        bucket.try_consume(5.0, 0).unwrap();
+        bucket.try_consume(5, 0).unwrap();
         // Next consume fails
-        let err = bucket.try_consume(1.0, 0).unwrap_err();
-        assert!(err.retry_after_ms > 0);
+        let err = bucket.try_consume(1, 0).unwrap_err();
+        assert_eq!(err.deficit_tokens, 1);
+        assert_eq!(err.retry_after_ticks, 1);
+        assert_eq!(err.retry_after_ms, 1);
     }
 
     #[test]
     fn tokens_refill_over_time() {
-        let mut bucket = TokenBucket::new(10.0, 100.0, 0); // 100 tokens/sec = 0.1/ms
-        bucket.try_consume(10.0, 0).unwrap();
-        assert!((bucket.tokens(0) - 0.0).abs() < 0.001);
+        let mut bucket = TokenBucket::from_ticks(10, 1, 0);
+        bucket.try_consume(10, 0).unwrap();
+        assert_eq!(bucket.tokens(0), 0);
 
-        // After 50ms → 5 tokens refilled
-        assert!((bucket.tokens(50) - 5.0).abs() < 0.001);
+        // After 5 ticks → 5 tokens refilled
+        assert_eq!(bucket.tokens(5), 5);
 
-        // After 100ms → 10 tokens (capped at capacity)
-        assert!((bucket.tokens(100) - 10.0).abs() < 0.001);
+        // After 10 ticks → 10 tokens (capped at capacity)
+        assert_eq!(bucket.tokens(10), 10);
     }
 
     #[test]
     fn refill_caps_at_capacity() {
-        let mut bucket = TokenBucket::new(5.0, 1000.0, 0); // 1000/sec, cap 5
-        bucket.try_consume(5.0, 0).unwrap();
+        let mut bucket = TokenBucket::from_ticks(5, 10, 0);
+        bucket.try_consume(5, 0).unwrap();
         // After a very long time, should still be capped at 5
-        assert!((bucket.tokens(999_999) - 5.0).abs() < 0.001);
+        assert_eq!(bucket.tokens(999_999), 5);
     }
 
     #[test]
     fn retry_after_calculation() {
-        let mut bucket = TokenBucket::new(0.0, 10.0, 0); // empty, 10 tokens/sec
-        let err = bucket.try_consume(10.0, 0).unwrap_err();
-        // 10 tokens / 10 per sec = 1 sec = 1000ms
-        assert_eq!(err.retry_after_ms, 1000);
+        let mut bucket = TokenBucket::with_initial(10, 0, 2, Tick(0));
+        let err = bucket.try_consume(10, 0).unwrap_err();
+        // 10 deficit tokens / 2 per tick = 5 ticks
+        assert_eq!(err.deficit_tokens, 10);
+        assert_eq!(err.retry_after_ticks, 5);
+        assert_eq!(err.retry_after_ms, 5);
     }
 
     #[test]
     fn recovery_after_token_refill() {
-        let mut bucket = TokenBucket::new(1.0, 10.0, 0); // 10 tokens/sec, cap 1
-        bucket.try_consume(1.0, 0).unwrap();
+        let mut bucket = TokenBucket::from_ticks(1, 1, 0);
+        bucket.try_consume(1, 0).unwrap();
         // Failed — no tokens
-        assert!(bucket.try_consume(1.0, 0).is_err());
-        // After 100ms → 1 token refilled → success
-        assert!(bucket.try_consume(1.0, 100).is_ok());
+        assert!(bucket.try_consume(1, 0).is_err());
+        // After 1 tick → 1 token refilled → success
+        assert!(bucket.try_consume(1, 1).is_ok());
     }
 }

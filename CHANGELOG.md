@@ -13,10 +13,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tri-license documentation block (`Apache-2.0 OR MIT OR CC0-1.0`) across root and crate documentation.
 - Specification registry and authentic Git commit locators in `specs/README.md`.
 - Keep-a-Changelog scaffolding and tracking file `CHANGELOG.md`.
+- Formal specification `SPEC-0003` defining the three-plane Escapement, Cortex mesh pool, and Revenant worker architecture.
+- Zero-I/O pool custody domain types (`CapabilitySlug`, `CustodyMode`, `PoolDeliveryRefs`, `PoolResultOutcome`, `PoolResultRefs`, `PoolMessageStatus`, `JobResolution`, `resolve_pool_job_state`, `max_pool_inflight`) and integer `TokenBucket` / impulse ordering in `ep-domain`.
+- `TaskState::PoolAssigned` and `WalOp::PoolDispatch` state transitions with bounded terminal history eviction in `escapement-core`.
+- `CortexPoolDriver`, `InMemoryCortexPoolDriver`, `Orchestrator::dispatch_pool`, `Orchestrator::reconcile_pool_job`, and `/v1/jobs`, `/v1/pool/results`, `/tasks/claim`, `/tasks/{id}/complete`, and `/tasks/{id}/fail` routes in `escapement-serve`.
+- `ep` CLI subcommands (`plan`, `wal`, `lanes`, `mesh`) for DAG validation, WAL playback, lane inspection, and Cortex mesh status checks.
+- Clockwork Conclave 7-specialist roster in `.claude/agents/` and sovereign lane topologies in `.saga/`.
 
 ### Changed
 - Restructured root `README.md` to include Crate Responsibility Matrix, Zero-I/O Domain Isolation rules, host throttling invariants, and concrete CLI usage examples.
 - Updated `ROADMAP.md` to reference crate READMEs and formal LeanSpec specifications.
+- Unified `escapement-core::metering::TokenBucket` on integer tick arithmetic re-exported from `ep-domain`, and updated `blackwall-bridge` default model identifier to `glm-5.2`.
 
 ### Deprecated
 

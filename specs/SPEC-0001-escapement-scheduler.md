@@ -3,7 +3,7 @@ status: complete
 created: 2026-10-12
 tags: [escapement, scheduler, deterministic, custody, token-bucket, leanspec]
 priority: critical
-scope: escapement-core
+scope: ep-domain, escapement-core
 depends_on: []
 ---
 
@@ -21,6 +21,8 @@ depends_on: []
    $$\text{State}(T) \in \{\text{Admitted}, \text{Assigned}(A), \text{Running}(A), \text{Completed}, \text{Failed}, \text{Cancelled}\}$$
 6. State handoffs shall execute atomically using compare-and-swap semantics. No task shall remain unassigned without an active timeout watch.
 7. Capability rate limits shall use monotonic integer token buckets $(R, B)$ refilled on tick boundaries without floating-point arithmetic.
+8. Same-tick impulses shall be ordered deterministically by composite stamp `(Tick, ImpulseSeq)` (`ImpulseStamp`).
+9. Loop progress evaluation shall classify stagnation patterns (`Spinning`, `Oscillation`, `NoDrift`, `DiminishingReturns`) into deterministic control directives (`Continue`, `Retry`, `Wait`, `Cancel`, `Converge`) without I/O.
 
 ```lean
 namespace Escapement.Spec
@@ -37,9 +39,9 @@ inductive CustodyState : Type where
 /-- Token bucket state with discrete integer balance and burst limit. -/
 structure TokenBucket where
   capacity : Nat
-  refill_rate : Nat
-  tokens : Nat
-  last_tick_ms : Nat
+  available : Nat
+  refill_per_tick : Nat
+  last_tick : Nat
 
 /-- Invariant: Queued tasks never exceed lane capacity. -/
 def LaneCapacityBounded (queued : Nat) (capacity : Nat) : Prop :=
@@ -74,16 +76,21 @@ Mechanical escapements convert continuous spring potential into discrete, regula
                                  ▼
      ┌────────────────────────────────────────────────────────┐
      │                    escapement-core                     │
-     │   • Registry (Heartbeats, sweep, state)               │
+     │   • Re-exports ep-domain single source of truth        │
+     │   • Registry (Heartbeats, sweep, state)                │
      │   • Plan DAG (Kahn's topo-sort, cycle rejection)       │
-     │   • Lane Scheduler (Weighted fair queueing)           │
-     │   • Metering (Token bucket rate limits)               │
-     │   • WAL (Append-only state machine persistence)       │
+     │   • Lane Scheduler (Weighted fair queueing)            │
+     │   • Metering (ConcurrencyGuard + ep_domain::TokenBucket│
+     │   • WAL (Append-only state machine persistence)        │
      └───────────────────────────┬────────────────────────────┘
                                  ▼
      ┌────────────────────────────────────────────────────────┐
      │                       ep-domain                        │
-     │   (Zero-I/O Algebraic Data Types, TaskId, PlanNode)   │
+     │   • Tick, ImpulseSeq, ImpulseStamp, Cadence            │
+     │   • TokenBucket (u64 integer tokens & tick boundaries) │
+     │   • ValveState, TickQuota, ValveDecision, HoldReason   │
+     │   • StagnationPattern, ControlDirective                │
+     │   • evaluate_impulse, detect_stagnation (Zero I/O)     │
      └────────────────────────────────────────────────────────┘
 ```
 
@@ -99,10 +106,10 @@ Mechanical escapements convert continuous spring potential into discrete, regula
 
 ## Tasks
 
-- [x] Implement zero-I/O domain types in `ep-domain` (`unsigned-gg/ep@6765df9:crates/ep-domain/src/lib.rs`).
+- [x] Implement zero-I/O domain types (`Tick`, `ImpulseSeq`, `ImpulseStamp`, `Cadence`, `TokenBucket`, `ValveState`, `TickQuota`, `ValveDecision`, `StagnationPattern`, `ControlDirective`) in `ep-domain` (`unsigned-gg/ep@6765df9:crates/ep-domain/src/lib.rs`).
+- [x] Re-export `ep-domain` from `escapement-core` and unify integer `TokenBucket` in `metering` (`unsigned-gg/ep@6765df9:crates/escapement-core/src/metering.rs`).
 - [x] Implement deterministic Kahn's topological sort in `escapement-core` (`unsigned-gg/ep@6765df9:crates/escapement-core/src/plan.rs`).
 - [x] Implement atomic task custody tracking with BLAKE3 hashes (`unsigned-gg/ep@6765df9:crates/escapement-core/src/custody.rs`).
-- [x] Implement discrete token bucket rate metering (`unsigned-gg/ep@6765df9:crates/escapement-core/src/metering.rs`).
 - [x] Implement WAL persistence and replay reconstruction (`unsigned-gg/ep@6765df9:crates/escapement-core/src/persistence.rs`).
 - [x] Implement Blackwall process isolation bridge (`unsigned-gg/ep@6765df9:crates/blackwall-bridge/src/lib.rs`).
 - [x] Implement single-writer orchestrator daemon in `escapement-serve` (`unsigned-gg/ep@6765df9:crates/escapement-serve/src/lib.rs`).
@@ -113,12 +120,13 @@ Mechanical escapements convert continuous spring potential into discrete, regula
    ```bash
    cargo test -j 2 --workspace
    ```
-2. **Mechanical Proofs:** 162 unit and integration tests passing across all crates.
+2. **Mechanical Proofs:** Workspace unit and integration tests passing across all crates.
 3. **Miri Cleanliness:** Verify memory safety and zero undefined behavior in pure domain transformations:
    ```bash
    cargo test -j 2 -p ep-domain
    ```
 4. **Authentic Source Locators:**
+   - `unsigned-gg/ep@6765df9:crates/ep-domain/src/lib.rs`
    - `unsigned-gg/ep@6765df9:crates/escapement-core/src/plan.rs`
    - `unsigned-gg/ep@6765df9:crates/escapement-core/src/custody.rs`
    - `unsigned-gg/ep@6765df9:crates/escapement-core/src/metering.rs`

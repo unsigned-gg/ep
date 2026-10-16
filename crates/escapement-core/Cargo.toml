@@ -8,6 +8,7 @@ repository.workspace = true
 publish = true
 
 [dependencies]
+ep-domain = { path = "../ep-domain" }
 
 [lints]
 workspace = true
