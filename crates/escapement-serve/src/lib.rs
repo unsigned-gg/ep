@@ -21,10 +21,13 @@ use escapement_core::persistence::{RecoveredState, WalEntry};
 use escapement_core::plan::Plan;
 use escapement_core::registry::{AgentId, Registry};
 use escapement_core::telemetry::DispatchMetrics;
+use escapement_core::waker::{WakeResult, WakerHealthGate, WakerProbe, WakerTarget};
 
 use blackwall_bridge::execution::PlanExecutor;
 pub mod http;
 pub mod pool;
+
+use crate::pool::{CortexPoolDriver, PoolSendRequest};
 
 /// Orchestrator configuration — loaded from `escapement.toml`.
 #[derive(Debug, Clone)]
@@ -82,6 +85,7 @@ pub struct Orchestrator {
     budget: BudgetTracker,
     custody: CustodyChain,
     plan_executors: BTreeMap<TaskId, PlanExecutor>,
+    waker_gate: WakerHealthGate,
     metrics: DispatchMetrics,
     /// OTLP exporter for distributed tracing.
     otlp: Option<escapement_core::tracing::OtlpExporter>,
@@ -106,6 +110,10 @@ pub enum OrchestratorError {
     InvalidStateTransition(TaskId),
     /// Pool correlation metadata failed validation.
     InvalidPoolRefs(String),
+    /// Scale-to-zero waker failed or tripped CrashLoopBackOff.
+    WakerUnhealthy(String),
+    /// Live Cortex pool HTTP/transport driver error.
+    PoolTransport(String),
 }
 
 impl fmt::Display for OrchestratorError {
@@ -118,6 +126,8 @@ impl fmt::Display for OrchestratorError {
             Self::UnknownTask(id) => write!(f, "unknown task: {id}"),
             Self::InvalidStateTransition(id) => write!(f, "invalid state transition: {id}"),
             Self::InvalidPoolRefs(msg) => write!(f, "invalid pool refs: {msg}"),
+            Self::WakerUnhealthy(msg) => write!(f, "waker unhealthy: {msg}"),
+            Self::PoolTransport(msg) => write!(f, "pool transport error: {msg}"),
         }
     }
 }
@@ -177,6 +187,7 @@ impl Orchestrator {
             budget,
             custody: CustodyChain::new(),
             plan_executors: BTreeMap::new(),
+            waker_gate: WakerHealthGate::new(3),
             metrics: DispatchMetrics::default(),
             otlp,
             clock_ms: 0,
@@ -424,6 +435,117 @@ impl Orchestrator {
         }
 
         Ok(resolution)
+    }
+
+    /// Register a scale-to-zero [`WakerTarget`] for a capability pool or lane.
+    pub fn register_waker_target(&mut self, capability: impl Into<String>, target: WakerTarget) {
+        self.waker_gate.register_target(capability, target);
+    }
+
+    /// Reference to the [`WakerHealthGate`] circuit breaker.
+    #[must_use]
+    pub fn waker_gate(&self) -> &WakerHealthGate {
+        &self.waker_gate
+    }
+
+    /// Mutable reference to the [`WakerHealthGate`] circuit breaker.
+    pub fn waker_gate_mut(&mut self) -> &mut WakerHealthGate {
+        &mut self.waker_gate
+    }
+
+    /// Ensure the scale-to-zero capability target is awake before dispatch,
+    /// enforcing the [`WakerHealthGate`] `CrashLoopBackOff` circuit breaker.
+    ///
+    /// # Errors
+    /// Returns [`OrchestratorError::WakerUnhealthy`] if the target is in `CrashLoopBackOff`
+    /// or fails to wake.
+    pub fn wake_capability(
+        &mut self,
+        capability: &str,
+        probe: &dyn WakerProbe,
+        timeout_ms: u64,
+    ) -> Result<WakeResult, OrchestratorError> {
+        self.waker_gate
+            .ensure_awake(capability, probe, timeout_ms)
+            .map_err(|e| OrchestratorError::WakerUnhealthy(e.to_string()))
+    }
+
+    /// Dispatch the highest-priority queued task through a [`CortexPoolDriver`] (`POST /v1/mesh/messages`
+    /// to `pool:<slug>`) and record the returned `stream_seq` in `TaskState::PoolAssigned`.
+    ///
+    /// # Errors
+    /// Returns [`OrchestratorError::InvalidPoolRefs`] or [`OrchestratorError::PoolTransport`] on failure.
+    pub fn dispatch_next_to_pool(
+        &mut self,
+        driver: &mut dyn CortexPoolDriver,
+        traceparent: Option<String>,
+    ) -> Result<Option<(TaskId, ep_domain::PoolDeliveryRefs)>, OrchestratorError> {
+        let Some((task_id, cap_str)) = self
+            .dispatcher
+            .jobs()
+            .filter_map(|(id, state)| {
+                if matches!(state, escapement_core::dispatch::TaskState::Queued) {
+                    self.dispatcher.spec(id)
+                } else {
+                    None
+                }
+            })
+            .max_by_key(|t| t.priority)
+            .map(|t| (t.id.clone(), t.required_capability.clone()))
+        else {
+            return Ok(None);
+        };
+
+        let pool_slug = ep_domain::CapabilitySlug::new(cap_str)
+            .map_err(|e| OrchestratorError::InvalidPoolRefs(e.to_string()))?;
+        let next_attempt = self.dispatcher.attempt(&task_id).saturating_add(1);
+        let placeholder_refs = ep_domain::PoolDeliveryRefs::new(
+            pool_slug.clone(),
+            1,
+            task_id.as_str(),
+            next_attempt,
+            traceparent.clone(),
+        )
+        .map_err(|e| OrchestratorError::InvalidPoolRefs(e.to_string()))?;
+        let req = PoolSendRequest {
+            pool: pool_slug,
+            subject: format!("escapement dispatch {}", task_id.as_str()),
+            body: format!(
+                "{{\"task_id\":\"{}\",\"attempt\":{next_attempt}}}",
+                task_id.as_str()
+            ),
+            refs: placeholder_refs,
+        };
+        let send_resp = driver
+            .send_pool(&req)
+            .map_err(OrchestratorError::PoolTransport)?;
+        self.dispatch_pool(send_resp.stream_seq, traceparent)
+    }
+
+    /// Query `GET /v1/mesh/message-status` via [`CortexPoolDriver`] for a `PoolAssigned` task
+    /// and reconcile its job state.
+    ///
+    /// # Errors
+    /// Returns [`OrchestratorError::UnknownTask`], [`OrchestratorError::InvalidStateTransition`],
+    /// or [`OrchestratorError::PoolTransport`] on failure.
+    pub fn poll_pool_status(
+        &mut self,
+        driver: &dyn CortexPoolDriver,
+        peer_id: &str,
+        task_id: &TaskId,
+        result: Option<&ep_domain::PoolResultRefs>,
+    ) -> Result<ep_domain::JobResolution, OrchestratorError> {
+        let (pool_slug, stream_seq) = match self.dispatcher.state(task_id) {
+            Some(escapement_core::dispatch::TaskState::PoolAssigned(refs)) => {
+                (refs.pool.clone(), refs.stream_seq)
+            }
+            Some(_) => return Err(OrchestratorError::InvalidStateTransition(task_id.clone())),
+            None => return Err(OrchestratorError::UnknownTask(task_id.clone())),
+        };
+        let status_view = driver
+            .message_status(peer_id, &pool_slug, stream_seq)
+            .map_err(OrchestratorError::PoolTransport)?;
+        self.reconcile_pool_job(task_id, status_view.status, result)
     }
 
     /// After `tick()` assigns tasks, spawn blackwall runs for each assignment.
@@ -753,6 +875,78 @@ mod tests {
             .reconcile_pool_job(&tid, ep_domain::PoolMessageStatus::Acked, Some(&ok_res))
             .unwrap();
         assert_eq!(res2, ep_domain::JobResolution::Completed);
+        assert_eq!(orch.get_job(&tid).unwrap().3, "completed");
+    }
+
+    #[test]
+    fn waker_gate_circuit_breaker_in_orchestrator() {
+        struct AlwaysDownProbe;
+        impl WakerProbe for AlwaysDownProbe {
+            fn wake(&self, _target: &WakerTarget, _timeout_ms: u64) -> WakeResult {
+                WakeResult::Failed("connection refused".into())
+            }
+        }
+
+        let mut orch = Orchestrator::new(OrchestratorConfig::default());
+        orch.register_waker_target(
+            "build",
+            WakerTarget::new("127.0.0.1:19999", "build-vm", "default"),
+        );
+
+        for _ in 0..3 {
+            assert!(orch
+                .wake_capability("build", &AlwaysDownProbe, 200)
+                .is_err());
+        }
+        assert!(orch.waker_gate().is_crash_looping("build"));
+        let err = orch
+            .wake_capability("build", &AlwaysDownProbe, 200)
+            .unwrap_err();
+        assert!(matches!(err, OrchestratorError::WakerUnhealthy(_)));
+    }
+
+    #[test]
+    fn dispatch_next_to_pool_and_poll_pool_status_with_in_memory_driver() {
+        let mut orch = Orchestrator::new(OrchestratorConfig::default());
+        orch.register_provider("gateway", 5);
+        orch.submit_task(task("t-drv", "build", 8)).unwrap();
+
+        let mut driver = crate::pool::InMemoryCortexPoolDriver::new();
+        let (tid, refs) = orch
+            .dispatch_next_to_pool(&mut driver, None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(tid.as_str(), "t-drv");
+        assert_eq!(refs.stream_seq, 1);
+
+        let res_inflight = orch
+            .poll_pool_status(&driver, "peer-pool", &tid, None)
+            .unwrap();
+        assert_eq!(res_inflight, ep_domain::JobResolution::InFlight);
+
+        let pool_slug = ep_domain::CapabilitySlug::new("build").unwrap();
+        driver.set_status(
+            &pool_slug,
+            1,
+            crate::pool::PoolStatusView {
+                status: ep_domain::PoolMessageStatus::Acked,
+                member: Some("worker-1".into()),
+                deliveries: 1,
+            },
+        );
+        let ok_res = ep_domain::PoolResultRefs::new(
+            1,
+            "t-drv",
+            1,
+            ep_domain::PoolResultOutcome::Ok,
+            None,
+            None,
+        )
+        .unwrap();
+        let res_done = orch
+            .poll_pool_status(&driver, "peer-pool", &tid, Some(&ok_res))
+            .unwrap();
+        assert_eq!(res_done, ep_domain::JobResolution::Completed);
         assert_eq!(orch.get_job(&tid).unwrap().3, "completed");
     }
 }

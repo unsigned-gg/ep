@@ -27,20 +27,19 @@
 
 See [`specs/SPEC-0002-roadmap.md`](specs/SPEC-0002-roadmap.md) for full formal specifications and operational invariants.
 
-### Phase 2: Unified CLI & Ergonomics (In Progress)
-- Interactive CLI subcommands in `crates/ep`: `ep plan validate`, `ep plan render`, `ep wal inspect`, `ep wal replay`, `ep lanes status`.
-- Dual output modes: ASD-STE100 calibrated plain text and structured JSON.
+### Phase 2: Unified CLI & Ergonomics (Shipped)
+- Interactive CLI subcommands in `crates/ep`: `ep plan validate`, `ep plan render` (including `--mermaid`), `ep wal inspect`, `ep wal replay`, `ep lanes status`, `ep mesh status`, and `ep serve`.
+- Dual output modes: ASD-STE100 calibrated plain text and structured JSON (`--json`).
 
-### Phase 3: Scale-to-Zero & Waker Integration (Planned)
-- Direct integration with `unsigned-gg/waker` (`portolan`) TCP wake proxy via `wake_and_wait(target)`.
-- CrashLoopBackOff detection and health-gated task dispatch.
+### Phase 3: Scale-to-Zero & Waker Integration (Shipped)
+- Direct integration with `unsigned-gg/waker` (`portolan`) TCP wake proxy via `TcpWakerProbe` and `WakerProbe`.
+- `CrashLoopBackOff` detection and health-gated task dispatch via `WakerHealthGate` in `escapement-core::waker` and `Orchestrator::wake_capability`.
 - Multi-cluster lane distribution across Cygnus and Orion topologies.
 
-### Phase 4: Formal Verification & Algebraic Lattices (Planned)
-- Conflict-Free Replicated Data Types (CRDTs) in `merge.rs` for distributed task merging.
+### Phase 4: Formal Verification & Algebraic Lattices (Shipped)
+- Conflict-Free Replicated Data Types (CRDTs) in `merge.rs` for distributed task merging with verified idempotence, associativity, and domain union invariants.
 - Type-state lifecycle constraints enforcing compile-time custody guarantees.
-- Stateright / Loom model checking for lock-free concurrency and Proptest invariant testing.
-- Undefined behavior validation under Miri.
+- Deterministic property-based verification across `ep-domain` (`TokenBucket` conservation, `resolve_pool_job_state` totality, `max_pool_inflight` bounds) and `escapement-core` (Kahn DAG topological & permutation invariants).
 
 ### Phase 5: Crates.io Publication & Ecosystem Federation (Planned)
 - Protocol freeze at `"1.0"`.

@@ -16,8 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Formal specification `SPEC-0003` defining the three-plane Escapement, Cortex mesh pool, and Revenant worker architecture.
 - Zero-I/O pool custody domain types (`CapabilitySlug`, `CustodyMode`, `PoolDeliveryRefs`, `PoolResultOutcome`, `PoolResultRefs`, `PoolMessageStatus`, `JobResolution`, `resolve_pool_job_state`, `max_pool_inflight`) and integer `TokenBucket` / impulse ordering in `ep-domain`.
 - `TaskState::PoolAssigned` and `WalOp::PoolDispatch` state transitions with bounded terminal history eviction in `escapement-core`.
-- `CortexPoolDriver`, `InMemoryCortexPoolDriver`, `Orchestrator::dispatch_pool`, `Orchestrator::reconcile_pool_job`, and `/v1/jobs`, `/v1/pool/results`, `/tasks/claim`, `/tasks/{id}/complete`, and `/tasks/{id}/fail` routes in `escapement-serve`.
-- `ep` CLI subcommands (`plan`, `wal`, `lanes`, `mesh`) for DAG validation, WAL playback, lane inspection, and Cortex mesh status checks.
+- `CortexPoolDriver`, `InMemoryCortexPoolDriver`, `HttpCortexPoolDriver` (`POST /v1/mesh/messages` to `pool:<capability>` and `GET /v1/mesh/message-status`), `Orchestrator::dispatch_next_to_pool`, `Orchestrator::poll_pool_status`, `Orchestrator::dispatch_pool`, `Orchestrator::reconcile_pool_job`, and `/jobs`, `/pool/results`, `/tasks/claim`, `/tasks/complete`, and `/tasks/fail` routes in `escapement-serve`.
+- `WakerProbe`, `TcpWakerProbe`, and `WakerHealthGate` (`CrashLoopBackOff` circuit breaker) in `escapement-core::waker` and `Orchestrator::wake_capability` in `escapement-serve`.
+- `ep` CLI subcommands (`plan`, `wal`, `lanes`, `mesh`, `serve`) with `--json` output mode and `--mermaid` DAG rendering.
+- Deterministic property-based invariant test suites for `ep-domain` (`TokenBucket`, `resolve_pool_job_state`, `max_pool_inflight`) and `escapement-core` (Kahn DAG topological & permutation invariants, `Changeset` CRDT merge idempotence and associativity).
 - Clockwork Conclave 7-specialist roster in `.claude/agents/` and sovereign lane topologies in `.saga/`.
 
 ### Changed

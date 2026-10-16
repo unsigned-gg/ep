@@ -18,6 +18,7 @@ workspace = true
 [dependencies]
 ep-domain = { path = "../ep-domain" }
 escapement-core = { path = "../escapement-core" }
+escapement-serve = { path = "../escapement-serve" }
 blackwall-bridge = { path = "../blackwall-bridge" }
 anyhow.workspace = true
 thiserror.workspace = true

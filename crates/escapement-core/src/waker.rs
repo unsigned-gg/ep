@@ -102,9 +102,183 @@ pub fn wake_and_wait(target: &WakerTarget, timeout_ms: u64) -> WakeResult {
     }
 }
 
+/// Pluggable probe interface for waking scale-to-zero targets.
+pub trait WakerProbe {
+    /// Attempt to wake `target` within `timeout_ms`.
+    fn wake(&self, target: &WakerTarget, timeout_ms: u64) -> WakeResult;
+}
+
+/// Production TCP probe that delegates to [`wake_and_wait`].
+#[derive(Debug, Default, Clone, Copy)]
+pub struct TcpWakerProbe;
+
+impl WakerProbe for TcpWakerProbe {
+    fn wake(&self, target: &WakerTarget, timeout_ms: u64) -> WakeResult {
+        wake_and_wait(target, timeout_ms)
+    }
+}
+
+/// Error returned when a waker health gate blocks task dispatch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WakerGateError {
+    /// Target has exceeded the consecutive wake failure threshold (`CrashLoopBackOff`).
+    CrashLoopBackOff {
+        /// Capability name gated by the waker.
+        capability: String,
+        /// Number of consecutive failed wake attempts.
+        consecutive_failures: u32,
+    },
+    /// A wake attempt timed out or failed before reaching readiness.
+    WakeFailed {
+        /// Capability name gated by the waker.
+        capability: String,
+        /// Underlying wake failure or timeout result.
+        result: WakeResult,
+        /// Updated consecutive failure count.
+        consecutive_failures: u32,
+    },
+}
+
+impl fmt::Display for WakerGateError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::CrashLoopBackOff {
+                capability,
+                consecutive_failures,
+            } => write!(
+                f,
+                "waker CrashLoopBackOff for capability '{capability}' ({consecutive_failures} consecutive failures)"
+            ),
+            Self::WakeFailed {
+                capability,
+                result,
+                consecutive_failures,
+            } => write!(
+                f,
+                "waker failed for capability '{capability}' (attempt {consecutive_failures}): {result}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for WakerGateError {}
+
+/// Tracks scale-to-zero [`WakerTarget`] bindings and `CrashLoopBackOff` circuit breaking per capability.
+#[derive(Debug, Clone)]
+pub struct WakerHealthGate {
+    targets: std::collections::BTreeMap<String, WakerTarget>,
+    consecutive_failures: std::collections::BTreeMap<String, u32>,
+    max_consecutive_failures: u32,
+}
+
+impl Default for WakerHealthGate {
+    fn default() -> Self {
+        Self::new(3)
+    }
+}
+
+impl WakerHealthGate {
+    /// Create a new waker health gate with the given `CrashLoopBackOff` failure threshold.
+    #[must_use]
+    pub fn new(max_consecutive_failures: u32) -> Self {
+        Self {
+            targets: std::collections::BTreeMap::new(),
+            consecutive_failures: std::collections::BTreeMap::new(),
+            max_consecutive_failures: max_consecutive_failures.max(1),
+        }
+    }
+
+    /// Bind a capability to a scale-to-zero [`WakerTarget`].
+    pub fn register_target(&mut self, capability: impl Into<String>, target: WakerTarget) {
+        let cap = capability.into();
+        self.consecutive_failures.insert(cap.clone(), 0);
+        self.targets.insert(cap, target);
+    }
+
+    /// Return the registered [`WakerTarget`] for `capability`, if any.
+    #[must_use]
+    pub fn target(&self, capability: &str) -> Option<&WakerTarget> {
+        self.targets.get(capability)
+    }
+
+    /// Return the current consecutive failure count for `capability`.
+    #[must_use]
+    pub fn consecutive_failures(&self, capability: &str) -> u32 {
+        self.consecutive_failures
+            .get(capability)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// Return `true` if `capability` is currently tripped in `CrashLoopBackOff`.
+    #[must_use]
+    pub fn is_crash_looping(&self, capability: &str) -> bool {
+        self.consecutive_failures(capability) >= self.max_consecutive_failures
+    }
+
+    /// Reset the failure counter for `capability`.
+    pub fn reset_failures(&mut self, capability: &str) {
+        if let Some(count) = self.consecutive_failures.get_mut(capability) {
+            *count = 0;
+        }
+    }
+
+    /// Ensure the target for `capability` is awake before dispatching work.
+    ///
+    /// If `capability` has no registered [`WakerTarget`], returns `Ok(WakeResult::AlreadyRunning)`.
+    ///
+    /// # Errors
+    /// Returns [`WakerGateError::CrashLoopBackOff`] if the target has already tripped the failure
+    /// threshold, or [`WakerGateError::WakeFailed`] if the probe fails or times out.
+    pub fn ensure_awake(
+        &mut self,
+        capability: &str,
+        probe: &dyn WakerProbe,
+        timeout_ms: u64,
+    ) -> Result<WakeResult, WakerGateError> {
+        let Some(target) = self.targets.get(capability).cloned() else {
+            return Ok(WakeResult::AlreadyRunning);
+        };
+
+        let current_failures = self.consecutive_failures(capability);
+        if current_failures >= self.max_consecutive_failures {
+            return Err(WakerGateError::CrashLoopBackOff {
+                capability: capability.to_string(),
+                consecutive_failures: current_failures,
+            });
+        }
+
+        let outcome = probe.wake(&target, timeout_ms);
+        match outcome {
+            WakeResult::AlreadyRunning | WakeResult::Waked => {
+                self.consecutive_failures.insert(capability.to_string(), 0);
+                Ok(outcome)
+            }
+            WakeResult::Timeout { .. } | WakeResult::Failed(_) => {
+                let next = current_failures.saturating_add(1);
+                self.consecutive_failures
+                    .insert(capability.to_string(), next);
+                Err(WakerGateError::WakeFailed {
+                    capability: capability.to_string(),
+                    result: outcome,
+                    consecutive_failures: next,
+                })
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct StaticProbe(WakeResult);
+
+    impl WakerProbe for StaticProbe {
+        fn wake(&self, _target: &WakerTarget, _timeout_ms: u64) -> WakeResult {
+            self.0.clone()
+        }
+    }
 
     #[test]
     fn waker_target_construction() {
@@ -144,5 +318,51 @@ mod tests {
         // Just verify it doesn't panic.
         let target = WakerTarget::new("nonexistent.invalid:9999", "test", "default");
         let _result = wake_and_wait(&target, 999_999_999);
+    }
+
+    #[test]
+    fn health_gate_trips_crash_loop_backoff_after_threshold_and_recovers_on_reset() {
+        let mut gate = WakerHealthGate::new(2);
+        gate.register_target(
+            "gpu-infer",
+            WakerTarget::new("waker.svc:10023", "infer-vm", "default"),
+        );
+
+        let fail_probe = StaticProbe(WakeResult::Failed("connection refused".into()));
+        assert!(matches!(
+            gate.ensure_awake("gpu-infer", &fail_probe, 500),
+            Err(WakerGateError::WakeFailed {
+                consecutive_failures: 1,
+                ..
+            })
+        ));
+        assert!(!gate.is_crash_looping("gpu-infer"));
+
+        assert!(matches!(
+            gate.ensure_awake("gpu-infer", &fail_probe, 500),
+            Err(WakerGateError::WakeFailed {
+                consecutive_failures: 2,
+                ..
+            })
+        ));
+        assert!(gate.is_crash_looping("gpu-infer"));
+
+        // Subsequent attempts short-circuit with CrashLoopBackOff even if probe would succeed.
+        let ok_probe = StaticProbe(WakeResult::Waked);
+        assert_eq!(
+            gate.ensure_awake("gpu-infer", &ok_probe, 500),
+            Err(WakerGateError::CrashLoopBackOff {
+                capability: "gpu-infer".into(),
+                consecutive_failures: 2,
+            })
+        );
+
+        // Operator/reconciler reset clears CrashLoopBackOff and allows wake.
+        gate.reset_failures("gpu-infer");
+        assert_eq!(
+            gate.ensure_awake("gpu-infer", &ok_probe, 500),
+            Ok(WakeResult::Waked)
+        );
+        assert_eq!(gate.consecutive_failures("gpu-infer"), 0);
     }
 }
