@@ -1,0 +1,12 @@
+# Escapement Clockwork Conclave (unsigned-gg/ep)
+# Overlay on the saga catalog for the Escapement Scheduler lane (estate/w4C:p1).
+[teams.ep-gang]
+topology = "ep-cockpit"
+members = [
+  { slot = 0, role = "gullveig", harness = "agy", effort = "high" },
+  { slot = 1, role = "sindri", effort = "medium" },
+  { slot = 2, role = "verdandi", effort = "medium" },
+  { slot = 3, role = "dvalinn", effort = "medium" },
+  { slot = 4, role = "saga", effort = "high" },
+  { slot = 5, role = "loki", effort = "high" },
+]

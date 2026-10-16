@@ -135,10 +135,29 @@ fn route(
             None,
         ),
         ("POST", "/dispatch") => handle_dispatch(orch, body, trace_ctx),
-        ("GET", "/jobs") => (handle_list_jobs(orch).0, handle_list_jobs(orch).1, None),
+        ("POST", "/tasks/claim") => {
+            let (status, resp) = handle_claim(orch, body);
+            (status, resp, None)
+        }
+        ("POST", "/tasks/complete") => {
+            let (status, resp) = handle_complete(orch, body);
+            (status, resp, None)
+        }
+        ("POST", "/tasks/fail") => {
+            let (status, resp) = handle_fail(orch, body);
+            (status, resp, None)
+        }
+        ("POST", "/pool/results") => {
+            let (status, resp) = handle_pool_results(orch, body);
+            (status, resp, None)
+        }
+        ("GET", "/jobs") => {
+            let (status, resp) = handle_list_jobs(orch);
+            (status, resp, None)
+        }
         ("GET", p) if p.starts_with("/jobs/") => {
-            let (status, body) = handle_get_job(orch, &p["/jobs/".len()..]);
-            (status, body, None)
+            let (status, resp) = handle_get_job(orch, &p["/jobs/".len()..]);
+            (status, resp, None)
         }
         _ => (404, json_error("not found"), None),
     }
@@ -185,20 +204,143 @@ fn handle_dispatch(
         ),
         Err(OrchestratorError::RateLimited) => (429, json_error("rate limited"), span),
         Err(OrchestratorError::UnknownTask(_)) => (404, json_error("unknown task"), span),
+        Err(OrchestratorError::InvalidStateTransition(_)) => {
+            (409, json_error("invalid state transition"), span)
+        }
+        Err(OrchestratorError::InvalidPoolRefs(msg)) => (400, json_error(&msg), span),
+    }
+}
+
+fn handle_claim(orch: &mut Orchestrator, body: &str) -> (u16, String) {
+    let Some(agent_str) = parse_json_string(body, "agent_id") else {
+        return (400, json_error("missing agent_id"));
+    };
+    let Ok(agent_id) = escapement_core::registry::AgentId::new(agent_str) else {
+        return (400, json_error("invalid agent_id"));
+    };
+    match orch.claim_task(&agent_id) {
+        Some((task_id, capability)) => (
+            200,
+            format!(
+                r#"{{"task_id":"{}","capability":"{}"}}"#,
+                task_id.as_str(),
+                capability
+            ),
+        ),
+        None => (204, String::new()),
+    }
+}
+
+fn handle_complete(orch: &mut Orchestrator, body: &str) -> (u16, String) {
+    let Some(id_str) = parse_json_string(body, "id").or_else(|| parse_json_string(body, "task_id"))
+    else {
+        return (400, json_error("missing task id"));
+    };
+    let Ok(task_id) = TaskId::new(id_str) else {
+        return (400, json_error("invalid task id"));
+    };
+    match orch.complete_task(&task_id) {
+        Ok(()) => (
+            200,
+            format!(r#"{{"id":"{}","state":"completed"}}"#, task_id.as_str()),
+        ),
+        Err(_) => (404, json_error("unknown or non-assigned task")),
+    }
+}
+
+fn handle_fail(orch: &mut Orchestrator, body: &str) -> (u16, String) {
+    let Some(id_str) = parse_json_string(body, "id").or_else(|| parse_json_string(body, "task_id"))
+    else {
+        return (400, json_error("missing task id"));
+    };
+    let Ok(task_id) = TaskId::new(id_str) else {
+        return (400, json_error("invalid task id"));
+    };
+    let reason = parse_json_string(body, "reason").unwrap_or_else(|| "unspecified failure".into());
+    match orch.fail_task(&task_id, reason) {
+        Ok(()) => (
+            200,
+            format!(r#"{{"id":"{}","state":"failed"}}"#, task_id.as_str()),
+        ),
+        Err(_) => (404, json_error("unknown or non-assigned task")),
+    }
+}
+
+fn handle_pool_results(orch: &mut Orchestrator, body: &str) -> (u16, String) {
+    let result_refs = match crate::pool::parse_pool_result_refs(body) {
+        Ok(r) => r,
+        Err(msg) => return (400, json_error(&msg)),
+    };
+    let Ok(task_id) = TaskId::new(&result_refs.task_id) else {
+        return (400, json_error("invalid task_id"));
+    };
+    let pool_status = parse_json_string(body, "pool_status")
+        .as_deref()
+        .and_then(ep_domain::PoolMessageStatus::parse)
+        .unwrap_or(ep_domain::PoolMessageStatus::Acked);
+
+    match orch.reconcile_pool_job(&task_id, pool_status, Some(&result_refs)) {
+        Ok(resolution) => {
+            let res_str = match resolution {
+                ep_domain::JobResolution::InFlight => "in_flight",
+                ep_domain::JobResolution::Completed => "completed",
+                ep_domain::JobResolution::Requeue { .. } => "requeued",
+                ep_domain::JobResolution::DeadLetter { .. } => "dead_lettered",
+            };
+            (
+                200,
+                format!(
+                    r#"{{"task_id":"{}","resolution":"{res_str}"}}"#,
+                    task_id.as_str()
+                ),
+            )
+        }
+        Err(_) => (404, json_error("unknown or non-pool-assigned task")),
     }
 }
 
 fn handle_list_jobs(orch: &Orchestrator) -> (u16, String) {
     let depth = orch.queue_depth();
-    (200, format!(r#"{{"jobs":[],"queue_depth":{depth}}}"#))
+    let entries: Vec<String> = orch
+        .list_jobs()
+        .into_iter()
+        .map(|(id, cap, pri, attempt, state)| {
+            format!(
+                r#"{{"job_id":"{}","capability":"{}","priority":{},"attempt":{},"state":"{}"}}"#,
+                id.as_str(),
+                cap,
+                pri,
+                attempt,
+                state
+            )
+        })
+        .collect();
+    (
+        200,
+        format!(
+            r#"{{"jobs":[{}],"queue_depth":{depth}}}"#,
+            entries.join(",")
+        ),
+    )
 }
 
-fn handle_get_job(_orch: &Orchestrator, job_id: &str) -> (u16, String) {
-    // The Dispatcher's state method takes a &TaskId; we check existence by
-    // parsing the id first.
-    match TaskId::new(job_id) {
-        Ok(_) => (200, format!(r#"{{"job_id":"{job_id}","state":"unknown"}}"#)),
-        Err(_) => (400, json_error("invalid job id")),
+fn handle_get_job(orch: &Orchestrator, job_id: &str) -> (u16, String) {
+    let Ok(task_id) = TaskId::new(job_id) else {
+        return (400, json_error("invalid job id"));
+    };
+    match orch.get_job(&task_id) {
+        Some((cap, pri, attempt, state)) => (
+            200,
+            format!(
+                r#"{{"job_id":"{}","capability":"{}","priority":{},"attempt":{},"state":"{}"}}"#,
+                task_id.as_str(),
+                cap,
+                pri,
+                attempt,
+                state
+            ),
+        ),
+        None => (404, json_error("job not found")),
     }
 }
 
@@ -220,6 +362,7 @@ fn write_response(writer: &mut impl Write, status: u16, body: &str) -> io::Resul
     let status_text = match status {
         200 => "OK",
         202 => "Accepted",
+        204 => "No Content",
         400 => "Bad Request",
         404 => "Not Found",
         409 => "Conflict",
@@ -249,14 +392,21 @@ fn parse_json_string(json: &str, field: &str) -> Option<String> {
 fn parse_json_numeric(json: &str, field: &str) -> Option<u8> {
     let marker = format!("\"{field}\":");
     let start = json.find(&marker)?;
-    let rest = &json[start + marker.len()..];
-    let end = rest.find(|c: char| !c.is_ascii_digit())?;
+    let rest = json[start + marker.len()..].trim_start();
+    let end = rest
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(rest.len());
+    if end == 0 {
+        return None;
+    }
     rest[..end].parse().ok()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::OrchestratorConfig;
+    use escapement_core::registry::AgentId;
 
     #[test]
     fn parse_dispatch_body_valid() {
@@ -285,5 +435,89 @@ mod tests {
         let s = json_error("test error");
         assert!(s.contains("test error"));
         assert!(s.contains("error"));
+    }
+
+    #[test]
+    fn http_jobs_and_task_lifecycle_routes() {
+        let mut orch = Orchestrator::new(OrchestratorConfig::default());
+        orch.register_provider("gateway", 5);
+        orch.registry_mut()
+            .register(AgentId::new("a1").unwrap(), ["build".into()], 0)
+            .unwrap();
+
+        // Unknown job returns 404 (not stub 200 unknown)
+        let (status, _) = handle_get_job(&orch, "t1");
+        assert_eq!(status, 404);
+
+        // Submit via /dispatch
+        let (status, _, _) = route(
+            &mut orch,
+            "POST",
+            "/dispatch",
+            r#"{"id":"t1","capability":"build","priority":7}"#,
+            None,
+        );
+        assert_eq!(status, 202);
+
+        // Query /jobs/t1 -> queued
+        let (status, body, _) = route(&mut orch, "GET", "/jobs/t1", "", None);
+        assert_eq!(status, 200);
+        assert!(body.contains(r#""state":"queued""#));
+
+        // Claim via /tasks/claim -> assigned
+        let (status, body, _) = route(
+            &mut orch,
+            "POST",
+            "/tasks/claim",
+            r#"{"agent_id":"a1"}"#,
+            None,
+        );
+        assert_eq!(status, 200);
+        assert!(body.contains(r#""task_id":"t1""#));
+
+        let (status, body, _) = route(&mut orch, "GET", "/jobs/t1", "", None);
+        assert_eq!(status, 200);
+        assert!(body.contains(r#""state":"assigned""#));
+
+        // Complete via /tasks/complete -> completed
+        let (status, body, _) = route(&mut orch, "POST", "/tasks/complete", r#"{"id":"t1"}"#, None);
+        assert_eq!(status, 200);
+        assert!(body.contains(r#""state":"completed""#));
+
+        let (status, body, _) = route(&mut orch, "GET", "/jobs/t1", "", None);
+        assert_eq!(status, 200);
+        assert!(body.contains(r#""state":"completed""#));
+    }
+
+    #[test]
+    fn http_pool_results_route_reconciles_state() {
+        let mut orch = Orchestrator::new(OrchestratorConfig::default());
+        orch.register_provider("gateway", 5);
+        route(
+            &mut orch,
+            "POST",
+            "/dispatch",
+            r#"{"id":"t-pool","capability":"review","priority":9}"#,
+            None,
+        );
+        orch.dispatch_pool(55, None).unwrap();
+
+        let (status, body, _) = route(&mut orch, "GET", "/jobs/t-pool", "", None);
+        assert_eq!(status, 200);
+        assert!(body.contains(r#""state":"pool_assigned""#));
+
+        let (status, body, _) = route(
+            &mut orch,
+            "POST",
+            "/pool/results",
+            r#"{"stream_seq":55,"task_id":"t-pool","attempt":1,"outcome":"ok"}"#,
+            None,
+        );
+        assert_eq!(status, 200);
+        assert!(body.contains(r#""resolution":"completed""#));
+
+        let (status, body, _) = route(&mut orch, "GET", "/jobs/t-pool", "", None);
+        assert_eq!(status, 200);
+        assert!(body.contains(r#""state":"completed""#));
     }
 }

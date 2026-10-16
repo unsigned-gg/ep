@@ -42,7 +42,7 @@ impl Default for BridgeConfig {
         Self {
             binary: "blackwall".into(),
             default_provider: "gateway".into(),
-            default_model: "zai/GLM-5.2".into(),
+            default_model: "glm-5.2".into(),
             default_max_turns: 20,
         }
     }
@@ -394,7 +394,7 @@ mod tests {
 
     #[test]
     fn parse_run_status_completed_unsettled() {
-        let output = r#"{"hash":"abc123","record":{"prompt":"...","model":"zai/GLM-5.2","stdout":"...","stderr":"","exit_code":0,"usage":null},"context":{"run":"abc123","parent_world":"root","changeset":"","settle_state":{"status":"unsettled"}}}"#;
+        let output = r#"{"hash":"abc123","record":{"prompt":"...","model":"glm-5.2","stdout":"...","stderr":"","exit_code":0,"usage":null},"context":{"run":"abc123","parent_world":"root","changeset":"","settle_state":{"status":"unsettled"}}}"#;
         let custody_ref = CustodyRef::new("abc123").unwrap();
         let status = parse_run_status(output, &custody_ref).unwrap();
         assert_eq!(status, RunStatus::Completed(custody_ref.clone()));
@@ -436,7 +436,7 @@ mod tests {
         let config = BridgeConfig::default();
         assert_eq!(config.binary, "blackwall");
         assert_eq!(config.default_provider, "gateway");
-        assert_eq!(config.default_model, "zai/GLM-5.2");
+        assert_eq!(config.default_model, "glm-5.2");
         assert_eq!(config.default_max_turns, 20);
     }
 
@@ -446,7 +446,7 @@ mod tests {
             task_name: "t1".into(),
             prompt: "test prompt".into(),
             provider: "gateway".into(),
-            model: "zai/GLM-5.2".into(),
+            model: "glm-5.2".into(),
             max_turns: 10,
         };
         assert_eq!(spec.task_name, "t1");

@@ -30,9 +30,10 @@ pub use backpressure::{
 pub use budget::{BudgetDecision, BudgetTracker, UnknownBudgetProvider};
 pub use custody::{CustodyChain, CustodyError, CustodyRef, DispatchRecord};
 pub use dispatch::{DispatchError, Dispatcher, Task, TaskId, TaskState};
+pub use ep_domain::*;
 pub use lanes::{LaneError, LaneScheduler, PriorityLane};
 pub use merge::{has_overlap, merge_all, merge_overlapping, overlapping_paths, Changeset};
-pub use metering::{ConcurrencyExceeded, ConcurrencyGuard, RateLimited, TokenBucket};
+pub use metering::{ConcurrencyExceeded, ConcurrencyGuard};
 pub use persistence::{
     deserialize_entry, reconstruct, replay, serialize_entry, write_entry, PersistenceError,
     RecoveredState, WalEntry, WalOp,

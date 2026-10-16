@@ -8,6 +8,7 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+ep-domain = { path = "../ep-domain" }
 escapement-core = { path = "../escapement-core" }
 blackwall-bridge = { path = "../blackwall-bridge" }
 

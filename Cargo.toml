@@ -1,6 +1,12 @@
 [workspace]
 resolver = "2"
-members = ["crates/*"]
+members = [
+    "crates/ep-domain",
+    "crates/escapement-core",
+    "crates/blackwall-bridge",
+    "crates/escapement-serve",
+    "crates/ep",
+]
 
 [workspace.package]
 edition = "2021"

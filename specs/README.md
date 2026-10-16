@@ -10,8 +10,9 @@ This directory is the LeanSpec registry of record for `unsigned-gg/ep`. Every ar
 
 | Spec | Title | Status | Priority | Scope | Tags | Primary Source Locator |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| [**SPEC-0001**](SPEC-0001-escapement-scheduler.md) | Escapement Scheduler & Deterministic Event Reactor | `complete` | `critical` | `escapement-core` | `scheduler`, `custody`, `metering` | `unsigned-gg/ep@6765df9:specs/SPEC-0001-escapement-scheduler.md` |
+| [**SPEC-0001**](SPEC-0001-escapement-scheduler.md) | Escapement Scheduler & Deterministic Event Reactor | `complete` | `critical` | `ep-domain`, `escapement-core` | `scheduler`, `custody`, `metering` | `unsigned-gg/ep@6765df9:specs/SPEC-0001-escapement-scheduler.md` |
 | [**SPEC-0002**](SPEC-0002-roadmap.md) | Escapement Protocol Roadmap & Evolution Horizons | `living` | `high` | `workspace` | `roadmap`, `scale-to-zero`, `formal-verification` | `unsigned-gg/ep@6765df9:specs/SPEC-0002-roadmap.md` |
+| [**SPEC-0003**](SPEC-0003-cortex-revenant-mesh-architecture.md) | Three-Plane Escapement Architecture (`ep` <-> `cortex` <-> `revenant`) | `complete` | `critical` | `workspace` | `cortex`, `revenant`, `mesh-pool`, `custody` | `unsigned-gg/ep:specs/SPEC-0003-cortex-revenant-mesh-architecture.md` |
 
 ## LeanSpec Specification Format
 
