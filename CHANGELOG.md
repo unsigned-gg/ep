@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Clockwork Conclave 7-specialist roster in `.claude/agents/` and sovereign lane topologies in `.saga/`.
 
 ### Changed
+- Migrate Rust CI build caching in `.github/workflows/ci.yml` from `Swatinem/rust-cache` to `kunobi-ninja/kache-action`.
 - Restructured root `README.md` to include Crate Responsibility Matrix, Zero-I/O Domain Isolation rules, host throttling invariants, and concrete CLI usage examples.
 - Updated `ROADMAP.md` to reference crate READMEs and formal LeanSpec specifications.
 - Unified `escapement-core::metering::TokenBucket` on integer tick arithmetic re-exported from `ep-domain`, and updated `blackwall-bridge` default model identifier to `glm-5.2`.
