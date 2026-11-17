@@ -7,3 +7,7 @@ Cargo.lock
 
 # Lane persona (lane-persona, ephemeral)
 .agents/persona.md
+
+# Agent custody and DAG runner stores (local runs; never committed)
+.blackwall/
+.dagrun/

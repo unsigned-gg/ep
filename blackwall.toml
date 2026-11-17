@@ -1,0 +1,16 @@
+# Blackwall build-pipeline custody config for unsigned-gg/ep.
+# Custody chain: run -> settle -> reconcile -> verify -> PR -> merge-gate.
+
+[defaults]
+provider = "gateway"
+model = "kimi-k3"
+
+[verify]
+command = "cargo fmt --all -- --check && cargo clippy --workspace --all-targets -j 2 -- -D warnings && cargo test --workspace -j 2"
+
+[merge]
+# Green CI reports ready; operator or fast-forward lane lands explicitly.
+automerge = false
+
+[budget]
+max_tokens_per_run = 200000

@@ -1,13 +1,35 @@
+# Yggdrasil pane topologies for unsigned-gg/ep, read by bifrost::yggdrasil.
+
+[topologies.solo]
+slots = [{ role = "brokkr", label = "lead" }]
+splits = []
+
+[topologies.dual-h]
+slots = [
+  { role = "brokkr", label = "lead" },
+  { role = "loki", label = "critic" },
+]
+splits = [{ from = 0, direction = "right", ratio = 0.5, new = 1 }]
+
+[topologies.triad]
+slots = [
+  { role = "brokkr", label = "lead" },
+  { role = "sindri", label = "builder" },
+  { role = "loki", label = "critic" },
+]
+splits = [
+  { from = 0, direction = "right", ratio = 0.5, new = 1 },
+  { from = 1, direction = "down", ratio = 0.5, new = 2 },
+]
+
 # Escapement cockpit topology: 6-slot cockpit-grid for unsigned-gg/ep.
-# Slot 0: lead/type alchemist (gullveig), Slots 1-3: bounded builders (sindri, verdandi, dvalinn),
-# Slot 4: specification architect (saga), Slot 5: adversarial critic (loki).
 [topologies.ep-cockpit]
 slots = [
-  { role = "gullveig", label = "lead" },
+  { role = "brokkr", label = "lead" },
   { role = "sindri", label = "worker-top" },
-  { role = "verdandi", label = "worker-mid" },
-  { role = "dvalinn", label = "worker-bottom" },
-  { role = "saga", label = "architect" },
+  { role = "sindri", label = "worker-mid" },
+  { role = "sindri", label = "worker-bottom" },
+  { role = "mimir", label = "architect" },
   { role = "loki", label = "critic" },
 ]
 splits = [

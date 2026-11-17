@@ -1,0 +1,67 @@
+$schema: https://projectfile.org/schema/v1.json
+kind: SoftwareSourceCode
+
+identity:
+  namespace: gg.unsigned
+  name: ep
+  version: "0.1.0"
+  title:
+    en: "ep — Escapement Scheduler"
+  summary:
+    en: "Metered, deterministic dispatch engine and event reactor for autonomous agent constellations in Rust."
+  created: "2026-10-11"
+  modified: "2026-11-16"
+
+repositories:
+  - url: "https://github.com/unsigned-gg/ep.git"
+    type: git
+    branch: main
+    role: origin
+
+links:
+  - type: source-code
+    url: https://github.com/unsigned-gg/ep
+  - type: bugs
+    url: https://github.com/unsigned-gg/ep/issues
+
+license:
+  spdx: Apache-2.0 OR MIT
+  file: LICENSE-MIT
+
+copyright:
+  year: 2026
+
+people:
+  - family-names: Todie
+    given-names: Christian M.
+    email: chris@todie.io
+    roles: [founder, author, maintainer, copyright]
+
+organizations:
+  - name: "Unsigned"
+    url: https://github.com/unsigned-gg
+    roles: [funder, copyright, maintainer]
+
+keywords:
+  - scheduler
+  - event-reactor
+  - escapement
+  - agent-orchestration
+  - deterministic-dispatch
+  - rust
+
+org.projectfile.ci:
+  nodes:
+    - id: zero-io-domain
+      run: "! grep -rnE 'std::net|std::fs|tokio|std::process' crates/ep-domain/src"
+    - id: fmt
+      run: "cargo fmt --all -- --check"
+    - id: clippy
+      depends_on: [fmt, zero-io-domain]
+      run: "cargo clippy --workspace -j 2 --all-targets -- -D warnings"
+    - id: check
+      depends_on: [clippy]
+      run: "cargo check --workspace -j 2 --all-targets"
+    - id: test
+      depends_on: [check]
+      run: "cargo test --workspace -j 2"

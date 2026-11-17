@@ -1,0 +1,72 @@
+# Flow: ep-gates
+#
+# Standard quality verification gates for unsigned-gg/ep:
+# rustfmt check, ep-domain zero-I/O hygiene, clippy (-D warnings, -j 2),
+# cargo test (-j 2), and Heimdal operator sign-off gate.
+
+[flow]
+name = "ep-gates"
+description = "Execute ep verification gates: fmt, zero-I/O hygiene, clippy (-D warnings, -j 2), cargo test (-j 2), and operator gate"
+
+[params.package]
+required = false
+default = "escapement-core"
+description = "Target crate package for focused test verification"
+
+[[step]]
+id = "fmt-check"
+title = "Verify rustfmt formatting"
+kind = "test"
+agent = "auto"
+verify_cmd = ["cargo", "fmt", "--all", "--", "--check"]
+prompt = """
+Run `cargo fmt --all -- --check` across all crates in the workspace.
+Ensure there are no formatting violations.
+"""
+
+[[step]]
+id = "hygiene-check"
+title = "Verify ep-domain zero-I/O domain isolation"
+kind = "test"
+agent = "auto"
+deps = ["fmt-check"]
+verify_cmd = ["make", "smoke"]
+prompt = """
+Run `make smoke` to verify `crates/ep-domain/src` has zero I/O imports.
+"""
+
+[[step]]
+id = "clippy-check"
+title = "Run clippy linter with warnings denied (-j 2)"
+kind = "test"
+agent = "auto"
+deps = ["hygiene-check"]
+verify_cmd = ["cargo", "clippy", "--workspace", "--all-targets", "-j", "2", "--", "-D", "warnings"]
+prompt = """
+Run `cargo clippy --workspace --all-targets -j 2 -- -D warnings`.
+Confirm the workspace passes without any warnings.
+"""
+
+[[step]]
+id = "test-suite"
+title = "Execute Cargo test suite (-j 2)"
+kind = "test"
+agent = "auto"
+deps = ["clippy-check"]
+verify_cmd = ["cargo", "test", "-p", "{{params.package}}", "-j", "2"]
+prompt = """
+Run unit and integration test suites with mandatory host throttling:
+`cargo test -p {{params.package}} -j 2`
+All tests must pass.
+"""
+
+[[step]]
+id = "operator-gate"
+title = "Operator sign-off gate"
+kind = "gate"
+gate = "heimdal:approval"
+deps = ["test-suite"]
+prompt = """
+Review verification receipts (fmt, hygiene, clippy, tests).
+Approve gate to permit PR landing or promotion.
+"""
